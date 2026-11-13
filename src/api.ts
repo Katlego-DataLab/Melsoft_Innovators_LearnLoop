@@ -228,13 +228,20 @@ export const api = {
       suitable_for_generation: boolean;
     }>("/content", { method: "POST", body });
   },
-  startLevelCheck: (moduleId: string, studentId: string) =>
+  startLevelCheck: (moduleId: string, studentId: string, useSeededQuiz = false) =>
     json<Quiz>(`/modules/${encodeURIComponent(moduleId)}/level-check`, "POST", {
       student_id: studentId,
+      ...(useSeededQuiz ? { use_seeded_quiz: true } : {}),
     }),
-  startRetest: (moduleId: string, studentId: string) =>
+  startRetest: (
+    moduleId: string,
+    studentId: string,
+    options: { topics?: string[]; questionCount?: number } = {},
+  ) =>
     json<Quiz>(`/modules/${encodeURIComponent(moduleId)}/retest`, "POST", {
       student_id: studentId,
+      ...(options.topics?.length ? { topics: options.topics.slice(0, 5) } : {}),
+      ...(options.questionCount ? { question_count: options.questionCount } : {}),
     }),
   submitAttempt: (
     quizId: string,

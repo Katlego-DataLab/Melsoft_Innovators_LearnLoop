@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { MODULE_CATALOG } from "./moduleCatalog";
 import {
   API_DOCS_URL,
   api,
@@ -24,6 +25,7 @@ import {
 type Role = "Student" | "Lecturer" | "Admin";
 type Page =
   | "Profile"
+  | "My modules"
   | "Study"
   | "Quiz"
   | "Results"
@@ -34,6 +36,7 @@ type Page =
   | "Insights"
   | "Modules";
 type Connection = "checking" | "connected" | "demo";
+type Theme = "light" | "dark";
 type ProfileDetails = {
   studentNumber: string;
   institution: string;
@@ -52,6 +55,7 @@ const SEED_MODULE: Module = {
 };
 const STUDENT_NAV: Array<{ page: Page; note?: string }> = [
   { page: "Profile" },
+  { page: "My modules" },
   { page: "Study" },
   { page: "Quiz", note: "Assessment" },
   { page: "Results" },
@@ -99,6 +103,10 @@ function Icon({ kind }: { kind: string }) {
     Wellbeing: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z",
     Insights: "M3 3v18h18M7 14v4M12 9v9M17 5v13",
     Modules: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5Zm0 0v13",
+    "My modules": "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5Zm0 0v13M12 8v6M9 11h6",
+    Sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
+    Moon: "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z",
+    Logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
   };
   return (
     <svg aria-hidden="true" viewBox="0 0 24 24" fill="none">
@@ -187,9 +195,27 @@ function App() {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [insights, setInsights] = useState<Insights | null>(null);
   const [gammaJob, setGammaJob] = useStored<GammaJob | null>("learnloop-gamma-job", null);
+  const [loggedIn, setLoggedIn] = useStored("learnloop-logged-in", false);
+  const [theme, setTheme] = useStored<Theme>(
+    "learnloop-theme",
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+  );
+  const [useSeededQuiz, setUseSeededQuiz] = useState(false);
+  const [retestCount, setRetestCount] = useStored("learnloop-retest-count", 3);
+  const [retestTopics, setRetestTopics] = useState<string[]>([]);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const studyModules = useMemo(
+    () => role === "Student" && profileDetails
+      ? modules.filter((item) => profileDetails.moduleIds.includes(item.id))
+      : modules,
+    [role, profileDetails, modules],
+  );
   const selectedModule =
-    modules.find((item) => item.id === selectedModuleId) ?? modules[0] ?? SEED_MODULE;
+    studyModules.find((item) => item.id === selectedModuleId) ?? studyModules[0] ?? SEED_MODULE;
   const flowModuleId = quiz?.module_id || selectedModule.id;
   const pageItems = useMemo(
     () => (role === "Student" ? STUDENT_NAV.map((item) => item.page) : ROLE_NAV[role]),
@@ -272,10 +298,102 @@ function App() {
     setPage(nextPage);
   }
 
-  function setRoleAndPage(nextRole: Role) {
-    setRole(nextRole);
-    setPage(nextRole === "Student" ? (student ? "Study" : "Profile") : ROLE_NAV[nextRole][0]);
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const nextRole = String(form.get("role") || "Student") as Role;
+    if (nextRole !== "Student") {
+      setRole(nextRole);
+      setPage(ROLE_NAV[nextRole][0]);
+      setLoggedIn(true);
+      setError("");
+      return;
+    }
+    const displayName = String(form.get("displayName") || "").trim();
+    const qualification = String(form.get("qualification") || "").trim();
+    const year = String(form.get("year") || "").trim();
+    const detail: ProfileDetails = {
+      studentNumber: String(form.get("studentNumber") || "").trim(),
+      institution: String(form.get("institution") || "").trim(),
+      qualification,
+      year,
+      moduleIds: [],
+    };
+    await run("create-student", async () => {
+      const created = await api.createStudent({
+        display_name: displayName,
+        course: `${qualification} (Year ${year})`,
+        academic_consent: false,
+        wellbeing_consent: false,
+      });
+      setStudent(created);
+      setProfileDetails(detail);
+      setRole("Student");
+      setQuiz(null);
+      setAttempt(null);
+      setStudyPlan(null);
+      setAnswers({});
+      setPage("My modules");
+      setLoggedIn(true);
+    });
+  }
+
+  function continueAsStudent() {
+    setRole("Student");
+    setPage(profileDetails?.moduleIds.length ? "Study" : "My modules");
+    setLoggedIn(true);
     setError("");
+  }
+
+  function logout() {
+    setLoggedIn(false);
+    setError("");
+  }
+
+  async function addModuleByName(rawName: string, enrol = true) {
+    const name = rawName.trim();
+    if (!name) return;
+    const existing = modules.find((item) => item.name.toLowerCase() === name.toLowerCase());
+    let target = existing;
+    if (!target) {
+      if (connection !== "connected") {
+        setError("Adding a new module needs the API to be connected.");
+        return;
+      }
+      setBusy("add-module");
+      setError("");
+      try {
+        target = await api.createModule({
+          name,
+          course: profileDetails?.qualification || undefined,
+        });
+        const created = target;
+        setModules((previous) => [...previous.filter((item) => item.id !== created.id), created]);
+      } catch (requestError) {
+        setError(errorMessage(requestError));
+        return;
+      } finally {
+        setBusy("");
+      }
+    }
+    if (enrol && target) {
+      const targetId = target.id;
+      setProfileDetails((previous) => {
+        const base = previous ?? { studentNumber: "", institution: "", qualification: "", year: "", moduleIds: [] };
+        return base.moduleIds.includes(targetId) ? base : { ...base, moduleIds: [...base.moduleIds, targetId] };
+      });
+      setSelectedModuleId(targetId);
+    }
+  }
+
+  function removeEnrolledModule(moduleId: string) {
+    setProfileDetails((previous) => previous
+      ? { ...previous, moduleIds: previous.moduleIds.filter((id) => id !== moduleId) }
+      : previous);
+    if (selectedModuleId === moduleId) {
+      const next = studyModules.find((item) => item.id !== moduleId);
+      if (next) setSelectedModuleId(next.id);
+    }
   }
 
   async function handleProfileCreate(event: FormEvent<HTMLFormElement>) {
@@ -346,8 +464,8 @@ function App() {
     await run(kind, async () => {
       const moduleId = kind === "retest" ? flowModuleId : selectedModule.id;
       const created = kind === "level"
-        ? await api.startLevelCheck(moduleId, student.id)
-        : await api.startRetest(moduleId, student.id);
+        ? await api.startLevelCheck(moduleId, student.id, useSeededQuiz && moduleId === SEED_MODULE.id)
+        : await api.startRetest(moduleId, student.id, { topics: retestTopics, questionCount: retestCount });
       setQuiz(created);
       setAnswers({});
       setQuestionIndex(0);
@@ -435,7 +553,7 @@ function App() {
   }
 
   const activePage = role === "Student" ? page : ROLE_NAV[role][0];
-  const activeTitle = activePage === "Study" ? "Your study space" :
+  const activeTitle = activePage === "My modules" ? "My modules" : activePage === "Study" ? "Your study space" :
     activePage === "Quiz" ? "Level check" :
       activePage === "Results" ? "Your results" :
         activePage === "Study plan" ? "A plan for your next step" :
@@ -445,10 +563,25 @@ function App() {
                 activePage === "Insights" ? "Module insights" :
                   activePage === "Modules" ? "Module administration" : "Your profile";
 
+  if (!loggedIn) {
+    return (
+      <LandingPage
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+        connection={connection}
+        busy={busy}
+        error={error}
+        returning={student}
+        onContinue={continueAsStudent}
+        onLogin={handleLogin}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); go("Profile"); }}>
+        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); go(role === "Student" ? "Study" : ROLE_NAV[role][0]); }}>
           <span className="brand-mark" aria-hidden="true"><span /></span>
           <span>learnloop<small>STUDENT SUCCESS</small></span>
         </a>
@@ -493,13 +626,11 @@ function App() {
         <header className="topbar">
           <div className="breadcrumbs"><span>LearnLoop</span><span className="crumb-slash">/</span>{activePage}</div>
           <div className="topbar-right">
-            <label className="role-label" htmlFor="role-switch">Demo role</label>
-            <select id="role-switch" value={role} onChange={(event) => setRoleAndPage(event.target.value as Role)}>
-              <option>Student</option>
-              <option>Lecturer</option>
-              <option>Admin</option>
-            </select>
-            <span className="role-note">not authentication</span>
+            <button type="button" className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`} title={theme === "dark" ? "Light mode" : "Dark mode"}>
+              <Icon kind={theme === "dark" ? "Sun" : "Moon"} />
+            </button>
+            <span className="role-pill">{role}</span>
+            <button type="button" className="button button-quiet button-small" onClick={logout}><Icon kind="Logout" /> Log out</button>
           </div>
         </header>
 
@@ -542,21 +673,47 @@ function App() {
               onConsentSave={saveConsent}
             />
           )}
+          {role === "Student" && activePage === "My modules" && (
+            <MyModulesPage
+              enrolled={studyModules}
+              selectedModuleId={selectedModule.id}
+              busy={busy}
+              connected={connection === "connected"}
+              onAdd={addModuleByName}
+              onRemove={removeEnrolledModule}
+              onSelect={(id) => { setSelectedModuleId(id); go("Study"); }}
+            />
+          )}
           {role === "Student" && activePage === "Study" && (
             <StudyPage
               student={student}
-              modules={modules}
+              modules={studyModules}
               selectedModuleId={selectedModule.id}
               connected={connection === "connected"}
               busy={busy}
               uploadedContent={uploadedContent}
+              useSeededQuiz={useSeededQuiz}
+              onUseSeededQuiz={setUseSeededQuiz}
               onSelectModule={setSelectedModuleId}
               onUpload={uploadFile}
               onStart={() => startQuiz("level")}
               onGoProfile={() => go("Profile")}
+              onGoModules={() => go("My modules")}
             />
           )}
-          {role === "Student" && (activePage === "Quiz" || activePage === "Re-test") && (
+          {role === "Student" && activePage === "Re-test" && (
+            <RetestSetup
+              attempt={attempt}
+              count={retestCount}
+              topics={retestTopics}
+              busy={busy}
+              connected={connection === "connected"}
+              onCount={setRetestCount}
+              onTopics={setRetestTopics}
+              onStart={() => startQuiz("retest")}
+            />
+          )}
+          {role === "Student" && (activePage === "Quiz" || (activePage === "Re-test" && quiz?.kind === "retest")) && (
             <QuizPage
               quiz={quiz}
               answers={answers}
@@ -576,7 +733,7 @@ function App() {
               retest={quiz?.kind === "retest"}
               busy={busy}
               onPlan={createPlan}
-              onRetest={() => startQuiz("retest")}
+              onRetest={() => go("Re-test")}
               onStudy={() => go("Study")}
             />
           )}
@@ -589,7 +746,7 @@ function App() {
               onCreate={createPlan}
               onGamma={() => student && studyPlan && pollGamma(() => api.createStudyMaterial(student.id, flowModuleId, studyPlan.study_plan_id), "study_material")}
               onPoll={() => gammaJob && pollGamma(() => api.getGammaJob(gammaJob.job_id), "study_material")}
-              onRetest={() => startQuiz("retest")}
+              onRetest={() => go("Re-test")}
             />
           )}
           {role === "Student" && activePage === "Progress" && (
@@ -640,6 +797,7 @@ function App() {
 function pageSubtitle(page: Page) {
   const subtitles: Record<Page, string> = {
     Profile: "A few details help us shape a more relevant learning space.",
+    "My modules": "Add the modules you study, or remove ones you no longer need.",
     Study: "Choose a module and begin with a gentle check of what you already know.",
     Quiz: "Take your time. Your answers are marked securely by LearnLoop.",
     Results: "See what feels familiar and where a little more practice may help.",
@@ -806,10 +964,13 @@ function StudyPage({
   connected,
   busy,
   uploadedContent,
+  useSeededQuiz,
+  onUseSeededQuiz,
   onSelectModule,
   onUpload,
   onStart,
   onGoProfile,
+  onGoModules,
 }: {
   student: Student | null;
   modules: Module[];
@@ -817,10 +978,13 @@ function StudyPage({
   connected: boolean;
   busy: string;
   uploadedContent: string;
+  useSeededQuiz: boolean;
+  onUseSeededQuiz: (value: boolean) => void;
   onSelectModule: (id: string) => void;
   onUpload: (event: FormEvent<HTMLFormElement>) => void;
   onStart: () => void;
   onGoProfile: () => void;
+  onGoModules: () => void;
 }) {
   const [fileName, setFileName] = useState("");
   const module = modules.find((item) => item.id === selectedModuleId) ?? modules[0];
@@ -829,6 +993,8 @@ function StudyPage({
       <div className="main-column">
         {!student ? (
           <Card><EmptyState title="Create your student profile first">Your profile connects your study sessions and results to you. Create one before starting a level check.</EmptyState><button className="button button-primary" type="button" onClick={onGoProfile}>Set up profile</button></Card>
+        ) : !modules.length ? (
+          <Card><EmptyState title="Add a module to study">Choose the modules you are studying and they will appear here.</EmptyState><button className="button button-primary" type="button" onClick={onGoModules}>Add modules</button></Card>
         ) : (
           <Card title="Choose where to begin" subtitle="A level check gives you a starting point, not a grade.">
             <label className="field">Study module
@@ -837,6 +1003,9 @@ function StudyPage({
               </select>
             </label>
             {module && <div className="module-summary"><span className="module-monogram">{module.code?.slice(0, 2) || "LL"}</span><div><strong>{module.name}</strong><p>{module.description || module.course || "Take a small step and see what you already understand."}</p></div></div>}
+            {module?.id === SEED_MODULE.id && (
+              <label className="inline-check"><input type="checkbox" checked={useSeededQuiz} onChange={(event) => onUseSeededQuiz(event.target.checked)} /> Use the fixed demo quiz (same questions every time)</label>
+            )}
             <div className="study-benefits">
               <div><span className="benefit-number">01</span><strong>Check in</strong><p>Answer a few questions at your own pace.</p></div>
               <div><span className="benefit-number">02</span><strong>Find your focus</strong><p>See strong and developing topics.</p></div>
@@ -873,6 +1042,190 @@ function StudyPage({
         <div className="mini-stat"><span className="mini-icon">✳</span><div><strong>Built around your pace</strong><small>No timers. No leaderboards. Just your progress.</small></div></div>
       </aside>
     </div>
+  );
+}
+
+function LandingPage({
+  theme,
+  onToggleTheme,
+  connection,
+  busy,
+  error,
+  returning,
+  onContinue,
+  onLogin,
+}: {
+  theme: Theme;
+  onToggleTheme: () => void;
+  connection: Connection;
+  busy: string;
+  error: string;
+  returning: Student | null;
+  onContinue: () => void;
+  onLogin: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const [role, setRole] = useState<Role>("Student");
+  const online = connection === "connected";
+  return (
+    <div className="landing">
+      <header className="landing-nav">
+        <span className="brand"><span className="brand-mark" aria-hidden="true"><span /></span><span>learnloop</span></span>
+        <div className="landing-nav-right">
+          <span className={`connection-mini ${connection}`}><span className="connection-dot" />{online ? "API connected" : connection === "checking" ? "Connecting…" : "Demo mode"}</span>
+          <button type="button" className="icon-button" onClick={onToggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}><Icon kind={theme === "dark" ? "Sun" : "Moon"} /></button>
+        </div>
+      </header>
+      <main className="landing-main">
+        <section className="landing-hero">
+          <p className="eyebrow">STUDENT SUCCESS PLATFORM</p>
+          <h1>Learn smarter, one small loop at a time.</h1>
+          <p className="landing-lead">Check what you already know, find the gaps, get a focused study plan, then re-test and watch your progress grow.</p>
+          <ul className="landing-points">
+            <li><span>01</span><div><strong>Pick your modules</strong><small>Search hundreds of subjects or add your own.</small></div></li>
+            <li><span>02</span><div><strong>Take a level check</strong><small>AI-assisted quizzes marked securely on the server.</small></div></li>
+            <li><span>03</span><div><strong>Improve with re-tests</strong><small>Choose the topics and how many questions you want.</small></div></li>
+          </ul>
+        </section>
+        <section className="login-card" aria-label="Log in">
+          <h2>Welcome</h2>
+          <p className="login-sub">Log in to continue. This is a demo login, not real authentication.</p>
+          {returning && (
+            <div className="returning">
+              <span className="avatar">{initials(returning.display_name)}</span>
+              <span><strong>{returning.display_name}</strong><small>Continue where you left off</small></span>
+              <button type="button" className="button button-primary button-small" onClick={onContinue}>Continue</button>
+            </div>
+          )}
+          <form className="form-stack" onSubmit={onLogin}>
+            <input type="hidden" name="role" value={role} />
+            <div className="segmented" role="tablist" aria-label="I am a">
+              {(["Student", "Lecturer", "Admin"] as Role[]).map((item) => (
+                <button key={item} type="button" role="tab" aria-selected={role === item} className={role === item ? "active" : ""} onClick={() => setRole(item)}>{item}</button>
+              ))}
+            </div>
+            {role === "Student" ? (
+              <>
+                {returning && <p className="field-hint">Or sign up as a new student:</p>}
+                <label className="field">Full name<input name="displayName" required maxLength={100} placeholder="e.g. Thandi Mokoena" autoComplete="name" /></label>
+                <div className="form-row">
+                  <label className="field">Student number<input name="studentNumber" required maxLength={80} placeholder="2026-01482" /></label>
+                  <label className="field">Year<select name="year" required defaultValue=""><option value="" disabled>Select</option>{[1, 2, 3, 4, 5, 6].map((year) => <option key={year} value={year}>Year {year}</option>)}</select></label>
+                </div>
+                <label className="field">Institution<input name="institution" required maxLength={150} placeholder="Your university or college" /></label>
+                <label className="field">Qualification<input name="qualification" required maxLength={120} placeholder="e.g. BSc Computer Science" /></label>
+              </>
+            ) : (
+              <p className="field-hint">{role === "Lecturer" ? "View anonymous, aggregated module insights." : "Create modules and request institution reports."}</p>
+            )}
+            {error && <div className="notice notice-error" role="alert"><span className="notice-symbol" aria-hidden="true">!</span><div><p>{error}</p></div></div>}
+            <button className="button button-primary button-wide button-large" type="submit" disabled={(role === "Student" && !online) || !!busy}>
+              {busy === "create-student" ? <><span className="spinner spinner-light" /> Signing in…</> : role === "Student" ? (returning ? "Sign up as new student" : "Log in") : `Continue as ${role}`}
+            </button>
+            {role === "Student" && !online && <p className="field-hint">Student login needs the API to be connected.</p>}
+          </form>
+        </section>
+      </main>
+      <footer className="landing-footer">Made for steady progress, not perfection. · POC — do not use real student data.</footer>
+    </div>
+  );
+}
+
+function MyModulesPage({
+  enrolled,
+  selectedModuleId,
+  busy,
+  connected,
+  onAdd,
+  onRemove,
+  onSelect,
+}: {
+  enrolled: Module[];
+  selectedModuleId: string;
+  busy: string;
+  connected: boolean;
+  onAdd: (name: string) => Promise<void>;
+  onRemove: (id: string) => void;
+  onSelect: (id: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const known = MODULE_CATALOG.some((item) => item.toLowerCase() === name.trim().toLowerCase());
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onAdd(name);
+    setName("");
+  }
+  return (
+    <div className="content-grid modules-layout">
+      <Card title="Add a module" subtitle="Search the list or type any module name. New names are created on the backend.">
+        <form className="form-stack" onSubmit={submit}>
+          <label className="field">Module name
+            <input value={name} onChange={(event) => setName(event.target.value)} required maxLength={150} list="module-catalog" autoComplete="off" placeholder="Search or type a module name" />
+            <datalist id="module-catalog">{MODULE_CATALOG.map((item) => <option key={item} value={item} />)}</datalist>
+          </label>
+          <button className="button button-primary" type="submit" disabled={!connected || !!busy || !name.trim()}>
+            {busy === "add-module" ? <><span className="spinner spinner-light" /> Adding…</> : known ? "Add module" : "Add as new module"}
+          </button>
+          {name.trim() && !known && <p className="field-hint">“{name.trim()}” isn’t in the list, so it will be created as a new module.</p>}
+        </form>
+      </Card>
+      <Card title={`Your modules (${enrolled.length})`} subtitle="Pick one to study, or remove it from your list.">
+        {enrolled.length ? (
+          <div className="module-list">
+            {enrolled.map((item) => (
+              <div key={item.id} className={`module-row ${selectedModuleId === item.id ? "selected" : ""}`}>
+                <button type="button" className="module-list-item" onClick={() => onSelect(item.id)}>
+                  <span className="module-monogram">{item.code?.slice(0, 2) || item.name.slice(0, 2).toUpperCase()}</span>
+                  <span><strong>{item.name}</strong><small>{item.code || "Module"}{item.course ? ` · ${item.course}` : ""}</small></span>
+                  <span className="module-check">Study →</span>
+                </button>
+                <button type="button" className="button button-quiet button-small danger" onClick={() => onRemove(item.id)} aria-label={`Remove ${item.name}`}>Remove</button>
+              </div>
+            ))}
+          </div>
+        ) : <EmptyState title="No modules yet">Add your first module to start a level check.</EmptyState>}
+      </Card>
+    </div>
+  );
+}
+
+function RetestSetup({
+  attempt,
+  count,
+  topics,
+  busy,
+  connected,
+  onCount,
+  onTopics,
+  onStart,
+}: {
+  attempt: Attempt | null;
+  count: number;
+  topics: string[];
+  busy: string;
+  connected: boolean;
+  onCount: (value: number) => void;
+  onTopics: (value: string[]) => void;
+  onStart: () => void;
+}) {
+  const available = attempt?.topics?.map((item) => item.topic) ?? [];
+  function toggle(topic: string) {
+    if (topics.includes(topic)) onTopics(topics.filter((item) => item !== topic));
+    else if (topics.length < 5) onTopics([...topics, topic]);
+  }
+  return (
+    <Card title="Re-test settings" subtitle="Choose what to practise. Leave topics empty to target your weakest ones.">
+      {available.length > 0 && (
+        <div className="chip-group" role="group" aria-label="Topics">
+          {available.map((topic) => <button key={topic} type="button" className={`chip ${topics.includes(topic) ? "selected" : ""}`} aria-pressed={topics.includes(topic)} onClick={() => toggle(topic)}>{topic}</button>)}
+        </div>
+      )}
+      <label className="field range-field">Number of questions: <strong>{count}</strong>
+        <input type="range" min={2} max={5} value={count} onChange={(event) => onCount(Number(event.target.value))} />
+      </label>
+      <button className="button button-primary" type="button" onClick={onStart} disabled={!connected || !!busy}>
+        {busy === "retest" ? <><span className="spinner spinner-light" /> Preparing…</> : <>Start re-test <span aria-hidden="true">→</span></>}
+      </button>
+    </Card>
   );
 }
 
@@ -1203,7 +1556,7 @@ function AdminPage({
     <div className="content-grid admin-layout">
       <Card title="Create a module" subtitle="This is the module creation action exposed by the backend.">
         <form className="form-stack" onSubmit={onCreate}>
-          <label className="field">Module name *<input name="name" required maxLength={150} placeholder="e.g. Introduction to Statistics" /></label>
+          <label className="field">Module name *<input name="name" required maxLength={150} list="module-catalog" autoComplete="off" placeholder="Search or type any module name" /><datalist id="module-catalog">{MODULE_CATALOG.map((name) => <option key={name} value={name} />)}</datalist><small className="inline-note">Pick a suggestion or type your own — any name is sent to the backend.</small></label>
           <div className="form-row"><label className="field">Module code<input name="code" maxLength={30} placeholder="e.g. STA101" /></label><label className="field">Course<input name="course" maxLength={150} placeholder="e.g. BCom (Year 1)" /></label></div>
           <label className="field">Description<textarea name="description" rows={4} maxLength={2000} placeholder="Briefly describe the module topics." /></label>
           <button className="button button-primary" type="submit" disabled={!connected || !!busy}>{busy === "create-module" ? <><span className="spinner spinner-light" /> Creating…</> : "Create module"}</button>
