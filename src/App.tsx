@@ -859,7 +859,7 @@ function App() {
           )}
           {role === "Institution" && activePage === "Monitoring" && <MonitoringPage modules={responsibilityModules} />}
           {role === "Institution" && activePage === "Support cases" && <SupportCasesPage modules={responsibilityModules} />}
-          {role === "Institution" && activePage === "Materials" && <MaterialsPage staffName={staffName} modules={responsibilityModules} />}
+          {role === "Institution" && activePage === "Materials" && <MaterialsPage staffName={staffName} modules={responsibilityModules} extraModules={modules.map((item) => item.name)} />}
           {role === "Institution" && activePage === "Teaching" && <TeachingPage entries={teaching} setEntries={setTeaching} extraModules={modules.map((item) => item.name)} />}
           {role === "Institution" && activePage === "Modules" && (
             <AdminPage

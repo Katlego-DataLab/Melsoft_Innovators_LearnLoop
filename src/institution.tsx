@@ -29,6 +29,8 @@ function Panel({ title, subtitle, children, className = "" }: { title?: string; 
   );
 }
 
+const sameModule = (a: string, b: string) => a.trim().replace(/\s+/g, " ").toLowerCase() === b.trim().replace(/\s+/g, " ").toLowerCase();
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -165,7 +167,7 @@ const SEED_MATERIALS: Material[] = [
 ];
 
 export function ModuleNotesCard({ moduleName }: { moduleName: string }) {
-  const items = readJSON<Material[]>(MATERIALS_KEY, SEED_MATERIALS).filter((item) => item.module === moduleName && item.notes);
+  const items = readJSON<Material[]>(MATERIALS_KEY, SEED_MATERIALS).filter((item) => sameModule(item.module, moduleName) && item.notes);
   if (!items.length) return null;
   return (
     <Panel title="Notes from your lecturers" subtitle={`Shared learning notes for ${moduleName}.`}>
@@ -176,15 +178,14 @@ export function ModuleNotesCard({ moduleName }: { moduleName: string }) {
   );
 }
 
-export function MaterialsPage({ staffName, modules }: { staffName: string; modules: string[] }) {
+export function MaterialsPage({ staffName, modules, extraModules }: { staffName: string; modules: string[]; extraModules: string[] }) {
   const [materials, setMaterials] = useLS<Material[]>(MATERIALS_KEY, SEED_MATERIALS);
-  const [moduleName, setModuleName] = useState(modules[0] ?? "");
+  const [moduleName, setModuleName] = useState(modules[0] ?? "Python Basics");
+  const options = useMemo(() => Array.from(new Set([...modules, ...extraModules, ...MODULE_CATALOG])), [modules, extraModules]);
   const [editing, setEditing] = useState<string | null>(null);
   const [saved, setSaved] = useState("");
-  const current = modules.includes(moduleName) ? moduleName : modules[0] ?? "";
-  const list = materials.filter((item) => item.module === current);
-
-  if (!modules.length) return <Panel><div className="empty-state"><h3>Add a module first</h3><p>Pick the modules you teach on the Teaching page, then you can contribute materials.</p></div></Panel>;
+  const current = moduleName.trim();
+  const list = materials.filter((item) => sameModule(item.module, current));
 
   function add(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -226,7 +227,7 @@ export function MaterialsPage({ staffName, modules }: { staffName: string; modul
       <Panel title="Contribute learning material" subtitle="Slides, PDFs, study guides, personal notes and your own explanations. They are added to the module's shared notes.">
         <form className="form-stack" onSubmit={add}>
           <div className="form-row">
-            <label className="field">Module<select value={current} onChange={(event) => setModuleName(event.target.value)}>{modules.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="field">Module<input value={moduleName} onChange={(event) => setModuleName(event.target.value)} list="materials-catalog" required autoComplete="off" placeholder="Search or type a module name" /><datalist id="materials-catalog">{options.map((item) => <option key={item} value={item} />)}</datalist></label>
             <label className="field">Type<select name="kind" defaultValue={KINDS[0]}>{KINDS.map((item) => <option key={item}>{item}</option>)}</select></label>
           </div>
           <label className="field">Title<input name="title" required maxLength={150} placeholder="e.g. Recursion explained with examples" /></label>
