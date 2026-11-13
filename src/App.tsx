@@ -1,3 +1,4 @@
+import { ConsultationCard, MaterialsPage, ModuleNotesCard, MonitoringPage, SEED_TEACHING, SupportCasesPage, TEACHING_KEY, TeachingPage, openSupportCase, type TeachingEntry } from "./institution";
 import {
   CSSProperties,
   FormEvent,
@@ -8,6 +9,7 @@ import {
   useState,
 } from "react";
 import { MODULE_CATALOG } from "./moduleCatalog";
+import { LEARNER_QUESTIONNAIRE, LEARNER_TYPES, LearnerType, scoreQuestionnaire } from "./learnerTypes";
 import {
   API_DOCS_URL,
   api,
@@ -22,10 +24,11 @@ import {
   StudyPlan,
 } from "./api";
 
-type Role = "Student" | "Lecturer" | "Admin";
+type Role = "Student" | "Institution";
 type Page =
   | "Profile"
   | "My modules"
+  | "Learning style"
   | "Study"
   | "Quiz"
   | "Results"
@@ -33,6 +36,10 @@ type Page =
   | "Re-test"
   | "Progress"
   | "Wellbeing"
+  | "Monitoring"
+  | "Support cases"
+  | "Materials"
+  | "Teaching"
   | "Insights"
   | "Modules";
 type Connection = "checking" | "connected" | "demo";
@@ -56,6 +63,7 @@ const SEED_MODULE: Module = {
 const STUDENT_NAV: Array<{ page: Page; note?: string }> = [
   { page: "Profile" },
   { page: "My modules" },
+  { page: "Learning style" },
   { page: "Study" },
   { page: "Quiz", note: "Assessment" },
   { page: "Results" },
@@ -64,10 +72,7 @@ const STUDENT_NAV: Array<{ page: Page; note?: string }> = [
   { page: "Progress" },
   { page: "Wellbeing" },
 ];
-const ROLE_NAV: Record<Exclude<Role, "Student">, Page[]> = {
-  Lecturer: ["Insights"],
-  Admin: ["Modules"],
-};
+const INSTITUTION_NAV: Page[] = ["Monitoring", "Support cases", "Materials", "Teaching", "Insights", "Modules"];
 
 function useStored<T>(
   key: string,
@@ -102,8 +107,13 @@ function Icon({ kind }: { kind: string }) {
     Progress: "M3 3v18h18M7 14l4-4 4 4 6-7",
     Wellbeing: "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z",
     Insights: "M3 3v18h18M7 14v4M12 9v9M17 5v13",
+    Monitoring: "M3 3v18h18M7 14v4M12 9v9M17 5v13",
+    "Support cases": "M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8Z",
+    Materials: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z",
+    Teaching: "M12 3 2 8l10 5 10-5-10-5ZM6 10.5V16c0 1.5 2.7 3 6 3s6-1.5 6-3v-5.5",
     Modules: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5Zm0 0v13",
     "My modules": "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5Zm0 0v13M12 8v6M9 11h6",
+    "Learning style": "M12 3a6 6 0 0 0-4 10.5V17h8v-3.5A6 6 0 0 0 12 3ZM9 21h6M10 17v2h4v-2",
     Sun: "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4",
     Moon: "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z",
     Logout: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
@@ -171,7 +181,8 @@ function StatusBadge({ value }: { value: string }) {
 }
 
 function App() {
-  const [role, setRole] = useStored<Role>("learnloop-role", "Student");
+  const [roleStored, setRole] = useStored<string>("learnloop-role", "Student");
+  const role: Role = roleStored === "Student" ? "Student" : "Institution";
   const [page, setPage] = useStored<Page>("learnloop-page", "Profile");
   const [student, setStudent] = useStored<Student | null>("learnloop-student", null);
   const [profileDetails, setProfileDetails] = useStored<ProfileDetails | null>(
@@ -201,6 +212,30 @@ function App() {
     window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light",
   );
   const [useSeededQuiz, setUseSeededQuiz] = useState(false);
+  const [stalledRetests, setStalledRetests] = useStored<Record<string, number>>("learnloop-stalled-retests", {});
+  const [checkinOpen, setCheckinOpen] = useState(false);
+  const [staffName, setStaffName] = useStored("learnloop-staff-name", "Lecturer");
+  const [teaching, setTeaching] = useStored<TeachingEntry[]>(TEACHING_KEY, SEED_TEACHING);
+  const [failStreak, setFailStreak] = useStored("learnloop-fail-streak", 0);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const responsibilityModules = useMemo(
+    () => teaching.filter((item) => item.teaches || item.expert || item.support).map((item) => item.module),
+    [teaching],
+  );
+  const [learnerType, setLearnerType] = useStored<LearnerType | null>("learnloop-learner-type", null);
+
+  async function answerCheckin(choice: "okay" | "stressed" | "support") {
+    if (!student?.consent?.wellbeing) return;
+    const values = { okay: [4, 2], stressed: [2, 4], support: [2, 5] }[choice];
+    await run("checkin", async () => {
+      await api.submitWellbeing(student.id, {
+        mood: values[0],
+        stress: values[1],
+        note: choice === "support" ? "Student asked for support after repeated re-tests." : undefined,
+      });
+      setCheckinOpen(false);
+    });
+  }
   const [retestCount, setRetestCount] = useStored("learnloop-retest-count", 3);
   const [retestTopics, setRetestTopics] = useState<string[]>([]);
 
@@ -218,7 +253,7 @@ function App() {
     studyModules.find((item) => item.id === selectedModuleId) ?? studyModules[0] ?? SEED_MODULE;
   const flowModuleId = quiz?.module_id || selectedModule.id;
   const pageItems = useMemo(
-    () => (role === "Student" ? STUDENT_NAV.map((item) => item.page) : ROLE_NAV[role]),
+    () => (role === "Student" ? STUDENT_NAV.map((item) => item.page) : INSTITUTION_NAV),
     [role],
   );
 
@@ -303,8 +338,9 @@ function App() {
     const form = new FormData(event.currentTarget);
     const nextRole = String(form.get("role") || "Student") as Role;
     if (nextRole !== "Student") {
-      setRole(nextRole);
-      setPage(ROLE_NAV[nextRole][0]);
+      setRole("Institution");
+      setStaffName(String(form.get("staffName") || "").trim() || "Lecturer");
+      setPage(INSTITUTION_NAV[0]);
       setLoggedIn(true);
       setError("");
       return;
@@ -484,6 +520,19 @@ function App() {
     await run("submit-attempt", async () => {
       const result = await api.submitAttempt(quiz.quiz_id, student.id, submittedAnswers);
       setAttempt(result);
+      const nextFails = result.score.score_pct < 50 ? failStreak + 1 : 0;
+      setFailStreak(nextFails >= 3 ? 0 : nextFails);
+      if (nextFails >= 3) {
+        openSupportCase(student, modules.find((item) => item.id === quiz.module_id)?.name ?? "—");
+        setSupportOpen(true);
+      }
+      if (quiz.kind === "retest" && result.comparison) {
+        const moduleKey = quiz.module_id;
+        const stalled = !(result.comparison.after_score > result.comparison.before_score);
+        const next = stalled ? (stalledRetests[moduleKey] ?? 0) + 1 : 0;
+        setStalledRetests((previous) => ({ ...previous, [moduleKey]: next >= 3 ? 0 : next }));
+        if (next >= 3) setCheckinOpen(true);
+      }
       setPage("Results");
     });
   }
@@ -542,18 +591,46 @@ function App() {
 
   async function pollGamma(start: () => Promise<GammaJob>, kind: string) {
     await run("gamma", async () => {
-      let job = { ...(await start()), kind };
-      setGammaJob(job);
-      for (let poll = 0; poll < 10 && job.status === "pending"; poll += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2500));
-        job = { ...(await api.getGammaJob(job.job_id)), kind };
-        setGammaJob(job);
-      }
+      setGammaJob({ ...(await start()), kind, checks: 0, last_check: Date.now() });
     });
   }
 
-  const activePage = role === "Student" ? page : ROLE_NAV[role][0];
-  const activeTitle = activePage === "My modules" ? "My modules" : activePage === "Study" ? "Your study space" :
+  async function checkGammaNow() {
+    if (!gammaJob) return;
+    const { job_id: jobId, kind, checks = 0 } = gammaJob;
+    await run("gamma", async () => {
+      const next = await api.getGammaJob(jobId);
+      setGammaJob({ ...next, kind, checks: checks + 1, last_check: Date.now() });
+    });
+  }
+
+  // Ping the backend (which asks Gamma) every 15 seconds until the job finishes.
+  useEffect(() => {
+    if (connection !== "connected" || !gammaJob || gammaJob.status !== "pending") return;
+    const { job_id: jobId, kind } = gammaJob;
+    const started = Date.now();
+    let active = true;
+    let checks = gammaJob.checks ?? 0;
+    const timer = window.setInterval(async () => {
+      if (Date.now() - started > 20 * 60 * 1000) {
+        window.clearInterval(timer);
+        setGammaJob((current) => current && current.job_id === jobId ? { ...current, status: "failed", error: "Gamma is taking longer than expected. Please try again." } : current);
+        return;
+      }
+      try {
+        const next = await api.getGammaJob(jobId);
+        checks += 1;
+        if (active) setGammaJob({ ...next, kind, checks, last_check: Date.now() });
+      } catch {
+        checks += 1;
+        if (active) setGammaJob((current) => current && current.job_id === jobId ? { ...current, checks, last_check: Date.now() } : current);
+      }
+    }, 15000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [connection, gammaJob?.job_id, gammaJob?.status]);
+
+  const activePage = role === "Student" ? page : pageItems.includes(page) ? page : INSTITUTION_NAV[0];
+  const activeTitle = activePage === "My modules" ? "My modules" : activePage === "Learning style" ? "How do you prefer to learn?" : activePage === "Study" ? "Your study space" :
     activePage === "Quiz" ? "Level check" :
       activePage === "Results" ? "Your results" :
         activePage === "Study plan" ? "A plan for your next step" :
@@ -561,7 +638,11 @@ function App() {
             activePage === "Progress" ? "Your progress" :
               activePage === "Wellbeing" ? "Wellbeing check-in" :
                 activePage === "Insights" ? "Module insights" :
-                  activePage === "Modules" ? "Module administration" : "Your profile";
+                  activePage === "Modules" ? "Module administration" :
+                    activePage === "Monitoring" ? "Student monitoring" :
+                      activePage === "Support cases" ? "Student support" :
+                        activePage === "Materials" ? "Learning materials" :
+                          activePage === "Teaching" ? "Your modules" : "Your profile";
 
   if (!loggedIn) {
     return (
@@ -581,14 +662,14 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); go(role === "Student" ? "Study" : ROLE_NAV[role][0]); }}>
+        <a className="brand" href="#" onClick={(event) => { event.preventDefault(); go(role === "Student" ? "Study" : INSTITUTION_NAV[0]); }}>
           <span className="brand-mark" aria-hidden="true"><span /></span>
           <span>learnloop<small>STUDENT SUCCESS</small></span>
         </a>
         <div className="sidebar-rule" />
         <p className="sidebar-label">{role === "Student" ? "YOUR LEARNING" : "INSTITUTION"}</p>
         <nav className="main-nav" aria-label="Main navigation">
-          {(role === "Student" ? STUDENT_NAV : ROLE_NAV[role].map((item) => ({ page: item }))).map(({ page: item }) => {
+          {(role === "Student" ? STUDENT_NAV : INSTITUTION_NAV.map((item) => ({ page: item }))).map(({ page: item }) => {
             const disabled =
               (item === "Quiz" && !quiz) ||
               (item === "Results" && !attempt) ||
@@ -684,6 +765,9 @@ function App() {
               onSelect={(id) => { setSelectedModuleId(id); go("Study"); }}
             />
           )}
+          {role === "Student" && activePage === "Learning style" && (
+            <LearnerTypePage current={learnerType} onSave={(type) => { setLearnerType(type); }} />
+          )}
           {role === "Student" && activePage === "Study" && (
             <StudyPage
               student={student}
@@ -701,6 +785,7 @@ function App() {
               onGoModules={() => go("My modules")}
             />
           )}
+          {role === "Student" && activePage === "Study" && <ModuleNotesCard moduleName={selectedModule.name} />}
           {role === "Student" && activePage === "Re-test" && (
             <RetestSetup
               attempt={attempt}
@@ -743,9 +828,11 @@ function App() {
               busy={busy}
               connected={connection === "connected"}
               gammaJob={gammaJob}
+              learnerType={learnerType}
+              onLearnerType={() => go("Learning style")}
               onCreate={createPlan}
               onGamma={() => student && studyPlan && pollGamma(() => api.createStudyMaterial(student.id, flowModuleId, studyPlan.study_plan_id), "study_material")}
-              onPoll={() => gammaJob && pollGamma(() => api.getGammaJob(gammaJob.job_id), "study_material")}
+              onPoll={() => gammaJob && checkGammaNow()}
               onRetest={() => go("Re-test")}
             />
           )}
@@ -755,7 +842,7 @@ function App() {
           {role === "Student" && activePage === "Wellbeing" && (
             <WellbeingPage student={student} busy={busy} onSubmit={submitWellbeing} onProfile={() => go("Profile")} />
           )}
-          {role === "Lecturer" && activePage === "Insights" && (
+          {role === "Institution" && activePage === "Insights" && (
             <InsightsPage
               modules={modules}
               selectedModuleId={selectedModule.id}
@@ -766,10 +853,14 @@ function App() {
               onSelect={(id) => { setSelectedModuleId(id); setInsights(null); }}
               onLoad={loadInsights}
               onReport={() => pollGamma(() => api.createInstitutionReport(selectedModule.id), "institution_report")}
-              onPoll={() => gammaJob && pollGamma(() => api.getGammaJob(gammaJob.job_id), "institution_report")}
+              onPoll={() => gammaJob && checkGammaNow()}
             />
           )}
-          {role === "Admin" && activePage === "Modules" && (
+          {role === "Institution" && activePage === "Monitoring" && <MonitoringPage modules={responsibilityModules} />}
+          {role === "Institution" && activePage === "Support cases" && <SupportCasesPage modules={responsibilityModules} />}
+          {role === "Institution" && activePage === "Materials" && <MaterialsPage staffName={staffName} modules={responsibilityModules} />}
+          {role === "Institution" && activePage === "Teaching" && <TeachingPage entries={teaching} setEntries={setTeaching} extraModules={modules.map((item) => item.name)} />}
+          {role === "Institution" && activePage === "Modules" && (
             <AdminPage
               modules={modules}
               selectedModuleId={selectedModule.id}
@@ -779,7 +870,7 @@ function App() {
               onCreate={createModule}
               onSelect={setSelectedModuleId}
               onReport={() => pollGamma(() => api.createInstitutionReport(selectedModule.id), "institution_report")}
-              onPoll={() => gammaJob && pollGamma(() => api.getGammaJob(gammaJob.job_id), "institution_report")}
+              onPoll={() => gammaJob && checkGammaNow()}
             />
           )}
 
@@ -790,6 +881,70 @@ function App() {
           </footer>
         </div>
       </main>
+      {supportOpen && role === "Student" && (
+        <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="support-title">
+          <div className="dialog">
+            <h2 id="support-title">Some tests have been tough lately</h2>
+            <p>That happens to many students and it doesn’t say anything bad about you. Your lecturer has been told you might like some extra academic help. You can also have a confidential chat with the institution’s psychologist, only if you want to.</p>
+            <div className="button-row">
+              <button type="button" className="button button-primary" onClick={() => { setSupportOpen(false); go("Wellbeing"); }}>See consultation times</button>
+              <button type="button" className="button button-quiet" onClick={() => setSupportOpen(false)}>Not now</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {checkinOpen && role === "Student" && (
+        <CheckinDialog
+          consent={!!student?.consent?.wellbeing}
+          busy={busy === "checkin"}
+          error={error}
+          onAnswer={answerCheckin}
+          onReview={() => { setCheckinOpen(false); go("Profile"); }}
+          onClose={() => setCheckinOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CheckinDialog({
+  consent,
+  busy,
+  error,
+  onAnswer,
+  onReview,
+  onClose,
+}: {
+  consent: boolean;
+  busy: boolean;
+  error: string;
+  onAnswer: (choice: "okay" | "stressed" | "support") => void;
+  onReview: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="checkin-title">
+      <div className="dialog">
+        <h2 id="checkin-title">Quick, private check-in</h2>
+        <p>Re-tests can feel tough, and that’s completely normal. How are you feeling about studying right now? This is optional and is not a test or an assessment of you.</p>
+        {consent ? (
+          <>
+            <div className="dialog-options">
+              <button type="button" className="button button-secondary" disabled={busy} onClick={() => onAnswer("okay")}>I’m okay</button>
+              <button type="button" className="button button-secondary" disabled={busy} onClick={() => onAnswer("stressed")}>I’m stressed</button>
+              <button type="button" className="button button-secondary" disabled={busy} onClick={() => onAnswer("support")}>I’d like support</button>
+            </div>
+            <p className="field-hint">Your answer is saved as a private wellbeing check-in. It is never shown in lecturer insights.</p>
+          </>
+        ) : (
+          <>
+            <p className="field-hint">Wellbeing check-ins are switched off, so nothing will be saved or shared. You can review your privacy choices whenever you like — there’s no pressure.</p>
+            <button type="button" className="button button-secondary" onClick={onReview}>Review privacy choices</button>
+          </>
+        )}
+        {error && <p className="validation-hint" role="alert">{error}</p>}
+        <button type="button" className="button button-quiet" onClick={onClose}>{consent ? "Skip and keep studying" : "Continue studying"}</button>
+      </div>
     </div>
   );
 }
@@ -798,6 +953,7 @@ function pageSubtitle(page: Page) {
   const subtitles: Record<Page, string> = {
     Profile: "A few details help us shape a more relevant learning space.",
     "My modules": "Add the modules you study, or remove ones you no longer need.",
+    "Learning style": "Tell us how you like to learn. It’s a preference, not a label.",
     Study: "Choose a module and begin with a gentle check of what you already know.",
     Quiz: "Take your time. Your answers are marked securely by LearnLoop.",
     Results: "See what feels familiar and where a little more practice may help.",
@@ -805,6 +961,10 @@ function pageSubtitle(page: Page) {
     "Re-test": "Try a short set of new questions on topics you want to strengthen.",
     Progress: "A view of your learning history and topic mastery.",
     Wellbeing: "A private, optional moment to check in with yourself.",
+    Monitoring: "Performance and difficulty for students in the modules you teach or support.",
+    "Support cases": "Students who may benefit from extra academic and wellbeing support.",
+    Materials: "Upload and improve the shared notes for each module.",
+    Teaching: "Choose the modules you teach, specialise in or can support.",
     Insights: "Anonymous, aggregated learning insights for this module.",
     Modules: "Create a module or request an anonymous institution report.",
   };
@@ -1099,7 +1259,7 @@ function LandingPage({
           <form className="form-stack" onSubmit={onLogin}>
             <input type="hidden" name="role" value={role} />
             <div className="segmented" role="tablist" aria-label="I am a">
-              {(["Student", "Lecturer", "Admin"] as Role[]).map((item) => (
+              {(["Student", "Institution"] as Role[]).map((item) => (
                 <button key={item} type="button" role="tab" aria-selected={role === item} className={role === item ? "active" : ""} onClick={() => setRole(item)}>{item}</button>
               ))}
             </div>
@@ -1115,7 +1275,10 @@ function LandingPage({
                 <label className="field">Qualification<input name="qualification" required maxLength={120} placeholder="e.g. BSc Computer Science" /></label>
               </>
             ) : (
-              <p className="field-hint">{role === "Lecturer" ? "View anonymous, aggregated module insights." : "Create modules and request institution reports."}</p>
+              <>
+                <label className="field">Your name<input name="staffName" required maxLength={100} placeholder="e.g. Dr. Nkosi" autoComplete="name" /></label>
+                <p className="field-hint">Lecturers and admins: manage materials, your modules, student monitoring and support.</p>
+              </>
             )}
             {error && <div className="notice notice-error" role="alert"><span className="notice-symbol" aria-hidden="true">!</span><div><p>{error}</p></div></div>}
             <button className="button button-primary button-wide button-large" type="submit" disabled={(role === "Student" && !online) || !!busy}>
@@ -1343,11 +1506,52 @@ function ResultsPage({
   );
 }
 
+function LearnerTypePage({ current, onSave }: { current: LearnerType | null; onSave: (type: LearnerType) => void }) {
+  const [quiz, setQuiz] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, LearnerType>>({});
+  const complete = LEARNER_QUESTIONNAIRE.every((item) => answers[item.id]);
+  return (
+    <div className="content-grid" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+      <Card title={current ? "Your learning preference" : "Choose how you like to learn"} subtitle="This is a preference to guide your study tips — not a diagnosis, and you can learn in many ways.">
+        <div className="type-grid">
+          {LEARNER_TYPES.map((item) => (
+            <button key={item.id} type="button" className={`type-card ${current === item.id ? "selected" : ""}`} aria-pressed={current === item.id} onClick={() => onSave(item.id)}>
+              <strong>{item.label}</strong><small>{item.blurb}</small>
+            </button>
+          ))}
+        </div>
+        {current && <p className="success-line" role="status"><span>✓</span> Saved: {LEARNER_TYPES.find((item) => item.id === current)?.label}. Your study plans will include matching tips.</p>}
+      </Card>
+      <Card title="Not sure? Take the quick questionnaire" subtitle="Six short questions. Skip it any time.">
+        {!quiz ? <button className="button button-secondary" type="button" onClick={() => setQuiz(true)}>Start questionnaire</button> : (
+          <form className="form-stack" onSubmit={(event) => { event.preventDefault(); onSave(scoreQuestionnaire(answers)); setQuiz(false); setAnswers({}); }}>
+            {LEARNER_QUESTIONNAIRE.map((item) => (
+              <fieldset key={item.id} className="module-fieldset">
+                <legend>{item.prompt}</legend>
+                <div className="chip-group">
+                  {item.options.map((option) => (
+                    <label key={option.label} className={`chip ${answers[item.id] === option.type ? "selected" : ""}`}>
+                      <input className="sr-only" type="radio" name={item.id} checked={answers[item.id] === option.type} onChange={() => setAnswers((previous) => ({ ...previous, [item.id]: option.type }))} />{option.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+            <button className="button button-primary" type="submit" disabled={!complete}>See my preference</button>
+          </form>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function StudyPlanPage({
   plan,
   busy,
   connected,
   gammaJob,
+  learnerType,
+  onLearnerType,
   onCreate,
   onGamma,
   onPoll,
@@ -1357,6 +1561,8 @@ function StudyPlanPage({
   busy: string;
   connected: boolean;
   gammaJob: GammaJob | null;
+  learnerType: LearnerType | null;
+  onLearnerType: () => void;
   onCreate: () => void;
   onGamma: () => void;
   onPoll: () => void;
@@ -1387,6 +1593,12 @@ function StudyPlanPage({
           {!!plan.plan.next_steps?.length && <div className="next-steps"><strong>When you’re ready</strong><ul>{plan.plan.next_steps.map((step) => <li key={step}>{step}</li>)}</ul></div>}
         </Card>
       </div>
+      <Card title="Study in a way that suits you" subtitle="A preference to try, not a rule about how you must learn." className="learner-tips">
+        {learnerType ? (() => {
+          const info = LEARNER_TYPES.find((item) => item.id === learnerType)!;
+          return <><p><strong>{info.label}</strong> — {info.blurb}</p><ul>{info.tips.map((tip) => <li key={tip}>{tip}</li>)}</ul><button className="button button-quiet button-small" type="button" onClick={onLearnerType}>Change preference</button></>;
+        })() : <><p>Tell us how you like to learn and we’ll add tips matched to this plan.</p><button className="button button-secondary button-small" type="button" onClick={onLearnerType}>Set my learning preference</button></>}
+      </Card>
       <Card title="Take it a little further" subtitle="Optional: request a polished study guide in Gamma.">
         <div className="gamma-action">
           <div><strong>Turn this plan into study material</strong><p>Gamma receives your study plan only—not your name or wellbeing information.</p></div>
@@ -1396,17 +1608,36 @@ function StudyPlanPage({
         </div>
         <GammaJobStatus job={gammaJob} kind="study_material" busy={busy === "gamma"} onPoll={onPoll} />
       </Card>
-      <button className="button button-primary" type="button" onClick={onRetest} disabled={!connected || !!busy}>Ready to try a re-test? <span aria-hidden="true">→</span></button>
+      <button className="button button-secondary no-print" type="button" onClick={() => window.print()}>Download plan as PDF</button>
+      <button className="button button-primary no-print" type="button" onClick={onRetest} disabled={!connected || !!busy}>Ready to try a re-test? <span aria-hidden="true">→</span></button>
     </div>
   );
 }
 
 function GammaJobStatus({ job, kind, busy, onPoll }: { job: GammaJob | null; kind: string; busy: boolean; onPoll: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  const pending = !!job && job.kind === kind && job.status === "pending";
+  useEffect(() => {
+    if (!pending) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [pending]);
   if (!job || job.kind !== kind) return null;
-  if (job.status === "completed" && job.gamma_url) return <p className="success-line" role="status"><span>✓</span> Your material is ready. <a href={job.gamma_url} target="_blank" rel="noreferrer">Open in Gamma ↗</a></p>;
+  const link = job.gamma_url || job.export_url;
+  if (job.status === "completed" && link) return <p className="success-line" role="status"><span>✓</span> Your {kind === "institution_report" ? "report" : "material"} is ready. <a href={link} target="_blank" rel="noreferrer">Open in Gamma ↗</a>{job.export_url && job.gamma_url && <> · <a href={job.export_url} target="_blank" rel="noreferrer">Download ↓</a></>}</p>;
   if (job.status === "completed") return <p className="gamma-failed" role="status">Gamma completed the request but did not return a result link.</p>;
   if (job.status === "failed") return <p className="gamma-failed" role="status">{job.error || "Gamma could not complete this request. You can try again later."}</p>;
-  return <div className="gamma-pending" role="status"><span className="spinner" /> Gamma is preparing your material. {busy ? "Checking status…" : "It may take a little while."} <button type="button" className="text-button" onClick={onPoll} disabled={busy}>Check status</button></div>;
+  const created = Date.parse(job.created_at ?? "");
+  const elapsed = Math.max(0, Math.floor((now - (Number.isNaN(created) ? (job.last_check ?? now) : created)) / 1000));
+  const next = Math.max(0, 15 - Math.floor((now - (job.last_check ?? now)) / 1000));
+  return (
+    <div className="gamma-pending gamma-loader" role="status">
+      <div className="gamma-loader-top"><span className="spinner" /> <strong>Gamma is building your {kind === "institution_report" ? "report" : "material"}…</strong></div>
+      <div className="loader-bar"><span /></div>
+      <small>{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")} elapsed · {busy ? "checking Gamma now…" : `next check in ${next}s`} · {job.checks ?? 0} check{job.checks === 1 ? "" : "s"} so far. You can keep using the app.</small>
+      <button type="button" className="text-button" onClick={onPoll} disabled={busy}>Check now</button>
+    </div>
+  );
 }
 
 function ProgressPage({
@@ -1449,12 +1680,17 @@ function WellbeingPage({
 }) {
   if (!student) return <Card><EmptyState title="Create a student profile first">A wellbeing check-in is attached to your student record.</EmptyState><button className="button button-secondary" type="button" onClick={onProfile}>Go to profile</button></Card>;
   if (!student.consent?.wellbeing) return (
+    <div className="stack-gap">
+    <ConsultationCard student={student} />
     <Card title="An optional private check-in" subtitle="You decide whether this feature is right for you.">
       <div className="privacy-callout"><span className="privacy-large">◇</span><div><h3>Wellbeing consent is off</h3><p>We won’t offer to submit a check-in until you choose to enable wellbeing consent. Check-ins are private and are not included in lecturer insights.</p></div></div>
       <button className="button button-secondary" type="button" onClick={onProfile}>Review privacy choices</button>
     </Card>
+    </div>
   );
   return (
+    <div className="stack-gap">
+    <ConsultationCard student={student} />
     <div className="content-grid wellbeing-layout">
       <Card title="How are you feeling today?" subtitle="This is optional. There are no right or wrong answers.">
         <div className="privacy-callout compact"><span className="privacy-large">◇</span><p>Your check-in is private. It is not shown to lecturers, does not affect your academic results, and can be skipped.</p></div>
@@ -1467,6 +1703,7 @@ function WellbeingPage({
         </form>
       </Card>
       <aside className="side-column"><div className="soft-card focus-card"><span className="card-kicker">A GENTLE REMINDER</span><h2>Taking a pause is progress, too.</h2><p>This check-in is not medical advice or a crisis service. If you need support, please reach out to someone you trust or a qualified professional.</p></div></aside>
+    </div>
     </div>
   );
 }

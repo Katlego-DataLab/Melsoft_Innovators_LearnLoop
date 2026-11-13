@@ -81,6 +81,8 @@ export type Student = {
   course?: string;
   consent: Consent;
   created_at?: string;
+  checks?: number;
+  last_check?: number;
 };
 export type Module = {
   id: string;
@@ -194,7 +196,11 @@ export type GammaJob = {
   kind?: string;
   status: "pending" | "completed" | "failed" | string;
   gamma_url?: string | null;
-  error?: string;
+  export_url?: string | null;
+  created_at?: string;
+  checks?: number;
+  last_check?: number;
+  error?: string | null;
 };
 
 export const api = {
