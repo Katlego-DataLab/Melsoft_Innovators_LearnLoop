@@ -22,6 +22,8 @@ For a deployed frontend, configure a same-origin reverse proxy for `/api/public`
 
 Build for production with `npm run build`.
 
+On Netlify, [netlify.toml](./netlify.toml) proxies `/api/public/*` to the backend, so no CORS setup or environment variable is needed.
+
 ## Connected backend endpoints
 
 - `GET /health`
