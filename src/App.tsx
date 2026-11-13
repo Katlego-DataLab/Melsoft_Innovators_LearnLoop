@@ -1,3 +1,4 @@
+import { INSTITUTIONS } from "./institutions";
 import { ConsultationCard, MaterialsPage, ModuleNotesCard, MonitoringPage, SEED_TEACHING, SupportCasesPage, TEACHING_KEY, TeachingPage, openSupportCase, type TeachingEntry } from "./institution";
 import {
   CSSProperties,
@@ -1045,7 +1046,7 @@ function ProfilePage({
             </label>
           </div>
           <label className="field">Institution *
-            <input name="institution" required maxLength={150} placeholder="Your university or college" />
+            <select name="institution" required defaultValue="Melsoft Academy">{INSTITUTIONS.map((item) => <option key={item}>{item}</option>)}</select>
           </label>
           <div className="form-row">
             <label className="field">Qualification *
@@ -1271,11 +1272,12 @@ function LandingPage({
                   <label className="field">Student number<input name="studentNumber" required maxLength={80} placeholder="2026-01482" /></label>
                   <label className="field">Year<select name="year" required defaultValue=""><option value="" disabled>Select</option>{[1, 2, 3, 4, 5, 6].map((year) => <option key={year} value={year}>Year {year}</option>)}</select></label>
                 </div>
-                <label className="field">Institution<input name="institution" required maxLength={150} placeholder="Your university or college" /></label>
+                <label className="field">Institution<select name="institution" required defaultValue="Melsoft Academy">{INSTITUTIONS.map((item) => <option key={item}>{item}</option>)}</select></label>
                 <label className="field">Qualification<input name="qualification" required maxLength={120} placeholder="e.g. BSc Computer Science" /></label>
               </>
             ) : (
               <>
+                <label className="field">Institution<select name="institution" required defaultValue="Melsoft Academy">{INSTITUTIONS.map((item) => <option key={item}>{item}</option>)}</select></label>
                 <label className="field">Your name<input name="staffName" required maxLength={100} placeholder="e.g. Dr. Nkosi" autoComplete="name" /></label>
                 <p className="field-hint">Lecturers and admins: manage materials, your modules, student monitoring and support.</p>
               </>
