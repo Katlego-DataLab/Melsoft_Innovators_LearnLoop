@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { generateWalkthrough, sanitizeInput } from "./server/walkthrough";
 
 const ELEVEN_VOICE = "JBFqnCBsd6RMkjVDRZzb";
 
@@ -7,8 +8,34 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const gammaKey = env.GAMMA || env.GAMMA_API_KEY || "";
   const elevenKey = env.ELEVANLABS || env.ELEVENLABS || env.ELEVENLABS_API_KEY || "";
+  const openAiKey = env.OPENAI || env.OPENAI_API_KEY || "";
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: "walkthrough-api",
+        configureServer(server) {
+          server.middlewares.use("/api/walkthrough", async (req, res) => {
+            const send = (status: number, body: unknown) => {
+              res.statusCode = status;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(body));
+            };
+            if (req.method !== "POST") return send(405, { message: "Method not allowed" });
+            if (!openAiKey) return send(503, { message: "AI is not configured." });
+            let raw = "";
+            for await (const chunk of req) raw += chunk;
+            const input = sanitizeInput((() => { try { return JSON.parse(raw); } catch { return null; } })());
+            if (!input) return send(400, { message: "A topic is required." });
+            try {
+              send(200, { scenes: await generateWalkthrough(input, openAiKey) });
+            } catch (error) {
+              send(502, { message: error instanceof Error ? error.message : "AI request failed." });
+            }
+          });
+        },
+      },
+    ],
     server: {
       proxy: {
         "/api/public": {

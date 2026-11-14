@@ -1,3 +1,4 @@
+import { SceneVisual, pickVisual, type VisualId } from "./sceneVisuals";
 import { INSTITUTIONS } from "./institutions";
 import { ConsultationCard, MaterialsPage, ModuleNotesCard, MonitoringPage, SEED_TEACHING, SupportCasesPage, TEACHING_KEY, TeachingPage, openSupportCase, type TeachingEntry } from "./institution";
 import {
@@ -1652,7 +1653,7 @@ const STUDY_FORMATS: Array<{ id: "audio" | "video" | GammaFormat; label: string;
   { id: "slides", label: "Slides", icon: "🖼️", blurb: "Gamma builds a slide deck with diagrams and images.", types: ["visual", "logical_analytical", "social"] },
   { id: "flashcards", label: "Flashcards", icon: "🗂️", blurb: "Gamma builds question-and-answer cards for quick recall.", types: ["kinaesthetic", "logical_analytical", "reading_writing", "solitary"] },
   { id: "guide", label: "Study guide", icon: "📘", blurb: "Gamma builds a written guide you can download as a PDF.", types: ["reading_writing", "logical_analytical", "solitary"] },
-  { id: "video", label: "Short video", icon: "🎬", blurb: "A 3-scene mini video with an ElevenLabs voice-over and on-screen key points.", types: ["visual", "auditory", "social"] },
+  { id: "video", label: "Visual walkthrough", icon: "🎞️", blurb: "Three short animated scenes with a voice-over and illustrations built from your plan.", types: ["visual", "auditory", "social"] },
 ];
 
 function StudyFormats({ plan, learnerType, gammaJobs, gammaBusy, onGamma, onPoll }: {
@@ -1689,9 +1690,10 @@ function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll
 }) {
   const [look, setLook] = useState("");
   const [extra, setExtra] = useState("");
+  const collapsible = format.id === "video";
   const suits = !!learnerType && format.types.includes(learnerType);
   return (
-    <article className={`format-card ${suits ? "format-card-match" : ""}`}>
+    <article className={`format-card ${suits ? "format-card-match" : ""} ${collapsible ? "format-card-wide" : ""}`}>
       <header><span className="format-icon" aria-hidden="true">{format.icon}</span><h4>{format.label}</h4></header>
       <p>{format.blurb}</p>
       <div className="format-chips" aria-label="Supported learning preferences">
@@ -1701,7 +1703,7 @@ function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll
           </span>
         ))}
       </div>
-      {format.id === "audio" ? <ListenButton text={shortNote(plan)} /> : format.id === "video" ? <VideoPlayer plan={plan} /> : (
+      {format.id === "audio" ? <ListenButton text={shortNote(plan)} /> : format.id === "video" ? <VideoPlayer plan={plan} learnerType={learnerType} /> : (
         <>
           <label className="field">How should it look? (optional)
             <textarea rows={2} maxLength={300} value={look} onChange={(event) => setLook(event.target.value)} placeholder="e.g. dark theme, bold colours, friendly tone" />
@@ -1719,7 +1721,7 @@ function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll
   );
 }
 
-type Scene = { title: string; text: string; url: string };
+type Scene = { title: string; text: string; url: string; visual: VisualId; words: string[] };
 
 function clip(text: string, max: number) {
   const sentences = text.match(/[^.!?]+[.!?]/g) ?? [text];
@@ -1728,33 +1730,89 @@ function clip(text: string, max: number) {
   return (out || text.slice(0, max)).trim();
 }
 
-function videoScenes(plan: StudyPlan): Array<{ title: string; text: string }> {
+function videoScenes(plan: StudyPlan): Array<{ title: string; text: string; visual: VisualId; words: string[] }> {
   const p = plan.plan;
   const practice = p.practice_questions?.[0]?.question || p.next_steps?.[0] || "Try one practice question on this topic.";
-  return [
-    { title: plan.topic, text: clip(p.summary || `Let's look at ${plan.topic}.`, 200) },
-    { title: "The key idea", text: clip(p.explanation || p.summary || plan.topic, 220) },
-    { title: "Try this next", text: clip(practice, 200) },
+  const all = `${plan.topic} ${p.summary ?? ""} ${p.explanation ?? ""} ${practice}`;
+  const base = [
+    { title: "Overview", text: clip(p.summary || `Let's look at ${plan.topic}.`, 200), fallbacks: ["hub", "idea", "target"] as VisualId[] },
+    { title: "How it works", text: clip(p.explanation || p.summary || plan.topic, 220), fallbacks: ["flow", "layers", "blocks"] as VisualId[] },
+    { title: "Try it yourself", text: clip(practice, 200), fallbacks: ["checklist", "qa", "spotlight"] as VisualId[] },
   ];
+  const used: VisualId[] = [];
+  return base.map((scene) => {
+    const visual = pickVisual(scene.text, used, scene.fallbacks);
+    used.push(visual);
+    const own = termsFrom(scene.text, 5);
+    const words = [...own, ...termsFrom(all, 6, own.map((item) => item.toLowerCase()))].slice(0, 6);
+    return { title: scene.title, text: scene.text, visual, words: words.length >= 3 ? words : [...words, plan.topic, "Concept", "Practice"].slice(0, 4) };
+  });
 }
 
-function VideoPlayer({ plan }: { plan: StudyPlan }) {
+async function speakWithRetry(text: string, attempts = 3): Promise<Blob> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await api.speak(text);
+    } catch (requestError) {
+      if (attempt >= attempts) throw requestError;
+      await new Promise((resolve) => window.setTimeout(resolve, 1500 * attempt));
+    }
+  }
+}
+
+const STOP_WORDS = new Set("start these there which their about because through between remember identify should would could learn using first basics small goals strong build understand practice question questions answer answers example examples consider following process called often every always other another within without really simple things thing likely makes make makes being having doing before after while where when what then them they this that with from your into over under also more most such each than only just very much many some".split(" "));
+
+function termsFrom(text: string, limit: number, exclude: string[] = []): string[] {
+  const found = text.match(/\/\d+|\b[A-Za-z]*\d[A-Za-z0-9]*\b|\b[A-Z][A-Za-z0-9]{1,}\b|\b[a-z]{6,}\b/g) ?? [];
+  const count = new Map<string, { word: string; n: number; score: number }>();
+  found.forEach((word, i) => {
+    const key = word.toLowerCase();
+    if (STOP_WORDS.has(key) || exclude.includes(key)) return;
+    const bonus = /^[A-Z]{2,}$|\d/.test(word) ? 3 : /^[A-Z]/.test(word) ? 1 : 0;
+    const entry = count.get(key) ?? { word: /^[a-z]/.test(word) ? word[0].toUpperCase() + word.slice(1) : word, n: 0, score: bonus };
+    entry.n += 1;
+    entry.score += 1 + (found.length - i) / found.length;
+    count.set(key, entry);
+  });
+  return [...count.values()].sort((a, b) => b.score - a.score).slice(0, limit).map((item) => item.word);
+}
+
+function VideoPlayer({ plan, learnerType }: { plan: StudyPlan; learnerType: LearnerType | null }) {
+  const [writtenByAi, setWrittenByAi] = useState(false);
   const [scenes, setScenes] = useState<Scene[] | null>(null);
   const [state, setState] = useState<"idle" | "loading" | "error">("idle");
   const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [failure, setFailure] = useState("");
   const audio = useRef<HTMLAudioElement>(null);
 
   async function create() {
     setState("loading");
     try {
-      const drafts = videoScenes(plan);
-      const blobs = await Promise.all(drafts.map((scene) => api.speak(`${scene.title}. ${scene.text}`)));
+      let drafts = videoScenes(plan);
+      let ai = false;
+      try {
+        const written = await api.walkthrough({
+          topic: plan.topic,
+          summary: plan.plan.summary,
+          explanation: plan.plan.explanation,
+          practice: plan.plan.practice_questions?.[0]?.question || plan.plan.next_steps?.[0],
+          learnerType: learnerType ?? undefined,
+        });
+        drafts = written.map((scene) => ({ title: scene.title, text: scene.text, visual: scene.visual as VisualId, words: scene.words }));
+        ai = true;
+      } catch {
+        // AI is optional; fall back to scenes cut from the study plan.
+      }
+      setWrittenByAi(ai);
+      const blobs: Blob[] = [];
+      for (const scene of drafts) blobs.push(await speakWithRetry(scene.text));
       setScenes(drafts.map((scene, i) => ({ ...scene, url: URL.createObjectURL(blobs[i]) })));
       setIndex(0);
       setPlaying(true);
       setState("idle");
-    } catch {
+    } catch (requestError) {
+      setFailure(requestError instanceof Error ? requestError.message : "Please try again.");
       setState("error");
     }
   }
@@ -1773,9 +1831,9 @@ function VideoPlayer({ plan }: { plan: StudyPlan }) {
     return (
       <>
         <button className="button button-secondary" type="button" onClick={create} disabled={state === "loading"}>
-          {state === "loading" ? <><span className="spinner" /> Making your video…</> : "Create short video"}
+          {state === "loading" ? <><span className="spinner" /> Preparing your walkthrough…</> : "Start walkthrough"}
         </button>
-        {state === "error" && <p className="gamma-failed" role="status">Video is unavailable right now.</p>}
+        {state === "error" && <p className="gamma-failed" role="status">The walkthrough is unavailable right now. {failure}</p>}
       </>
     );
   }
@@ -1783,9 +1841,11 @@ function VideoPlayer({ plan }: { plan: StudyPlan }) {
   return (
     <div className="mini-video">
       <div className="mini-video-screen" key={index}>
-        <small>Scene {index + 1} of {scenes.length}</small>
-        <h5>{scene.title}</h5>
-        <p>{scene.text}</p>
+        <small>Part {index + 1} of {scenes.length} · {writtenByAi ? "AI-written from your study plan" : "From your study plan"}</small>
+        <div className="mini-video-body">
+          <div className="mini-video-copy"><h5>{scene.title}</h5><p>{scene.text}</p></div>
+          <SceneVisual id={scene.visual} words={scene.words} title={plan.topic} />
+        </div>
         <div className="mini-video-bar"><span style={{ width: `${((index + (playing ? 0.5 : 0)) / scenes.length) * 100}%` }} /></div>
       </div>
       <audio ref={audio} src={scene.url} onEnded={ended} onPause={() => audio.current?.ended && setPlaying(false)} />

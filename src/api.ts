@@ -321,6 +321,16 @@ export const api = {
       error: data.status === "failed" ? data.error?.message || "Gamma could not complete this request." : null,
     };
   },
+  walkthrough: async (input: { topic: string; summary?: string; explanation?: string; practice?: string; learnerType?: string }) => {
+    const res = await fetch("/api/walkthrough", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !Array.isArray(data.scenes)) throw new Error(data?.message || `AI request failed (${res.status})`);
+    return data.scenes as Array<{ title: string; text: string; visual: string; words: string[] }>;
+  },
   speak: async (text: string): Promise<Blob> => {
     const res = await fetch("/api/tts", {
       method: "POST",

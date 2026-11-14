@@ -50,3 +50,7 @@ The API is an unauthenticated POC. Do not use it with real student data.
 Gamma study material/reports (PDF export) and ElevenLabs audio notes are called through a server-side proxy so the keys stay private.
 - Local: put `GAMMA=...` and `ELEVANLABS=...` in `.env` (git-ignored); the Vite dev server proxies `/api/gamma` and `/api/tts`.
 - Netlify: add the same two environment variables; `netlify/functions/gamma.mts` and `tts.mts` do the proxying.
+
+## AI-written walkthrough (optional)
+
+Add `OPENAI=sk-...` to `.env` (and as a Netlify environment variable). The "Visual walkthrough" panel then asks OpenAI (`gpt-4o-mini`, server-side via `server/walkthrough.ts`) to write its 3 scenes, narration, key terms and illustration choice. Without a key it falls back to scenes cut from the study plan.
