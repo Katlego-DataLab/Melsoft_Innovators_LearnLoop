@@ -576,3 +576,13 @@ h1, h2, h3 { font-family: Manrope, "DM Sans", sans-serif; }
 .format-card h4 { margin: 0; }
 .format-card p { margin: 0; color: var(--muted); }
 .format-icon { font-size: 1.6rem; }
+
+.format-card:has(.mini-video) { grid-column: 1 / -1; }
+.mini-video { display: grid; gap: 10px; }
+.mini-video-screen { background: linear-gradient(135deg, #3b2a8f, #6d4aff); color: #fff; border-radius: 14px; padding: 22px; min-height: 180px; display: grid; align-content: center; gap: 8px; animation: sceneIn .5s ease; }
+.mini-video-screen h5 { margin: 0; font-size: 1.4rem; }
+.mini-video-screen p, .mini-video-screen small { margin: 0; color: #fff; opacity: .92; }
+.mini-video-bar { height: 4px; background: rgba(255,255,255,.3); border-radius: 4px; overflow: hidden; }
+.mini-video-bar span { display: block; height: 100%; background: #fff; transition: width .6s ease; }
+.mini-video-controls { display: flex; gap: 8px; }
+@keyframes sceneIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

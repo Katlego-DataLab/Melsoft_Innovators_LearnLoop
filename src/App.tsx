@@ -7,6 +7,7 @@ import {
   SetStateAction,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { MODULE_CATALOG } from "./moduleCatalog";
@@ -1646,11 +1647,12 @@ function shortNote(plan: StudyPlan) {
   return note.trim();
 }
 
-const STUDY_FORMATS: Array<{ id: "audio" | GammaFormat; label: string; icon: string; blurb: string; types: LearnerType[] }> = [
+const STUDY_FORMATS: Array<{ id: "audio" | "video" | GammaFormat; label: string; icon: string; blurb: string; types: LearnerType[] }> = [
   { id: "audio", label: "Audio summary", icon: "🔊", blurb: "A very short spoken, high-level summary. The text is hidden unless you want to read it.", types: ["auditory", "solitary", "kinaesthetic"] },
   { id: "slides", label: "Slides", icon: "🖼️", blurb: "Gamma builds a slide deck with diagrams and images.", types: ["visual", "logical_analytical", "social"] },
   { id: "flashcards", label: "Flashcards", icon: "🗂️", blurb: "Gamma builds question-and-answer cards for quick recall.", types: ["kinaesthetic", "logical_analytical", "reading_writing", "solitary"] },
   { id: "guide", label: "Study guide", icon: "📘", blurb: "Gamma builds a written guide you can download as a PDF.", types: ["reading_writing", "logical_analytical", "solitary"] },
+  { id: "video", label: "Short video", icon: "🎬", blurb: "A 3-scene mini video with an ElevenLabs voice-over and on-screen key points.", types: ["visual", "auditory", "social"] },
 ];
 
 function StudyFormats({ plan, learnerType, gammaJobs, gammaBusy, onGamma, onPoll }: {
@@ -1699,7 +1701,7 @@ function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll
           </span>
         ))}
       </div>
-      {format.id === "audio" ? <ListenButton text={shortNote(plan)} /> : (
+      {format.id === "audio" ? <ListenButton text={shortNote(plan)} /> : format.id === "video" ? <VideoPlayer plan={plan} /> : (
         <>
           <label className="field">How should it look? (optional)
             <textarea rows={2} maxLength={300} value={look} onChange={(event) => setLook(event.target.value)} placeholder="e.g. dark theme, bold colours, friendly tone" />
@@ -1714,6 +1716,84 @@ function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll
         </>
       )}
     </article>
+  );
+}
+
+type Scene = { title: string; text: string; url: string };
+
+function clip(text: string, max: number) {
+  const sentences = text.match(/[^.!?]+[.!?]/g) ?? [text];
+  let out = "";
+  for (const sentence of sentences) if ((out + sentence).length <= max) out += `${sentence.trim()} `;
+  return (out || text.slice(0, max)).trim();
+}
+
+function videoScenes(plan: StudyPlan): Array<{ title: string; text: string }> {
+  const p = plan.plan;
+  const practice = p.practice_questions?.[0]?.question || p.next_steps?.[0] || "Try one practice question on this topic.";
+  return [
+    { title: plan.topic, text: clip(p.summary || `Let's look at ${plan.topic}.`, 200) },
+    { title: "The key idea", text: clip(p.explanation || p.summary || plan.topic, 220) },
+    { title: "Try this next", text: clip(practice, 200) },
+  ];
+}
+
+function VideoPlayer({ plan }: { plan: StudyPlan }) {
+  const [scenes, setScenes] = useState<Scene[] | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const [index, setIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const audio = useRef<HTMLAudioElement>(null);
+
+  async function create() {
+    setState("loading");
+    try {
+      const drafts = videoScenes(plan);
+      const blobs = await Promise.all(drafts.map((scene) => api.speak(`${scene.title}. ${scene.text}`)));
+      setScenes(drafts.map((scene, i) => ({ ...scene, url: URL.createObjectURL(blobs[i]) })));
+      setIndex(0);
+      setPlaying(true);
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+
+  useEffect(() => {
+    if (scenes && playing) void audio.current?.play().catch(() => setPlaying(false));
+  }, [scenes, index, playing]);
+
+  function ended() {
+    if (!scenes) return;
+    if (index < scenes.length - 1) setIndex(index + 1);
+    else setPlaying(false);
+  }
+
+  if (!scenes) {
+    return (
+      <>
+        <button className="button button-secondary" type="button" onClick={create} disabled={state === "loading"}>
+          {state === "loading" ? <><span className="spinner" /> Making your video…</> : "Create short video"}
+        </button>
+        {state === "error" && <p className="gamma-failed" role="status">Video is unavailable right now.</p>}
+      </>
+    );
+  }
+  const scene = scenes[index];
+  return (
+    <div className="mini-video">
+      <div className="mini-video-screen" key={index}>
+        <small>Scene {index + 1} of {scenes.length}</small>
+        <h5>{scene.title}</h5>
+        <p>{scene.text}</p>
+        <div className="mini-video-bar"><span style={{ width: `${((index + (playing ? 0.5 : 0)) / scenes.length) * 100}%` }} /></div>
+      </div>
+      <audio ref={audio} src={scene.url} onEnded={ended} onPause={() => audio.current?.ended && setPlaying(false)} />
+      <div className="mini-video-controls">
+        <button className="button button-secondary button-small" type="button" onClick={() => { if (playing) { audio.current?.pause(); setPlaying(false); } else setPlaying(true); }}>{playing ? "⏸ Pause" : "▶ Play"}</button>
+        <button className="button button-quiet button-small" type="button" onClick={() => { setIndex(0); setPlaying(true); }}>↺ Replay</button>
+      </div>
+    </div>
   );
 }
 
