@@ -44,3 +44,9 @@ Requests follow the live OpenAPI schemas. In particular, quiz submissions use `s
 The current API does not expose a module-list or module-edit endpoint, student enrolment, or storage for student number and institution. The UI offers the seeded module and modules created during this browser session; created module references and extra profile details are kept in local browser storage, not represented as backend records. Student name, course, and consent use the documented student API. No individual student or wellbeing data is requested for lecturer insights.
 
 The API is an unauthenticated POC. Do not use it with real student data.
+
+## Gamma + audio (no Lovable changes needed)
+
+Gamma study material/reports (PDF export) and ElevenLabs audio notes are called through a server-side proxy so the keys stay private.
+- Local: put `GAMMA=...` and `ELEVANLABS=...` in `.env` (git-ignored); the Vite dev server proxies `/api/gamma` and `/api/tts`.
+- Netlify: add the same two environment variables; `netlify/functions/gamma.mts` and `tts.mts` do the proxying.

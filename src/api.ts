@@ -203,6 +203,38 @@ export type GammaJob = {
   error?: string | null;
 };
 
+export type GammaFormat = "guide" | "slides" | "flashcards";
+export type GammaOptions = { format: GammaFormat; look?: string; extra?: string };
+
+const GAMMA_FORMAT_HINTS: Record<GammaFormat, string> = {
+  guide: "A clear written study guide with headings and short paragraphs.",
+  slides: "A slide deck with a diagram or image on most slides and little text.",
+  flashcards: "Flashcards: each card is one short question, followed by a card with its answer. No long paragraphs.",
+};
+
+async function startGamma(inputText: string, options: GammaOptions): Promise<GammaJob> {
+  const instructions = [GAMMA_FORMAT_HINTS[options.format], options.look && `Look and feel: ${options.look}`, "Do not include any personal information."]
+    .filter(Boolean)
+    .join(" ");
+  const text = options.extra ? `${inputText}\n\nAlso cover: ${options.extra}` : inputText;
+  const res = await fetch("/api/gamma/generations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inputText: text,
+      textMode: "generate",
+      format: options.format === "guide" ? "document" : "presentation",
+      exportAs: "pdf",
+      numCards: options.format === "flashcards" ? 10 : 6,
+      additionalInstructions: instructions.slice(0, 1800),
+      ...(options.format === "slides" ? { imageOptions: { source: "aiGenerated" } } : {}),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.generationId) throw new Error(data?.message || `Gamma request failed (${res.status})`);
+  return { job_id: data.generationId, status: "pending", created_at: new Date().toISOString() };
+}
+
 export const api = {
   health: () => request<{ status: string }>("/health"),
   createStudent: (body: {
@@ -275,14 +307,27 @@ export const api = {
     "POST",
     body,
   ),
-  createStudyMaterial: (studentId: string, moduleId: string, planId: string) =>
-    json<GammaJob>("/gamma/study-material", "POST", {
-      student_id: studentId,
-      module_id: moduleId,
-      study_plan_id: planId,
-    }),
-  createInstitutionReport: (moduleId: string) =>
-    json<GammaJob>("/gamma/institution-report", "POST", { module_id: moduleId }),
-  getGammaJob: (id: string) =>
-    request<GammaJob>(`/gamma/jobs/${encodeURIComponent(id)}`),
+  createStudyMaterial: (inputText: string, options: GammaOptions) => startGamma(inputText, options),
+  createInstitutionReport: (inputText: string) => startGamma(inputText, { format: "guide" }),
+  getGammaJob: async (id: string): Promise<GammaJob> => {
+    const res = await fetch(`/api/gamma/generations/${encodeURIComponent(id)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.message || `Gamma check failed (${res.status})`);
+    return {
+      job_id: id,
+      status: data.status === "completed" ? "completed" : data.status === "failed" ? "failed" : "pending",
+      gamma_url: data.gammaUrl ?? null,
+      export_url: data.exportUrl ?? null,
+      error: data.status === "failed" ? data.error?.message || "Gamma could not complete this request." : null,
+    };
+  },
+  speak: async (text: string): Promise<Blob> => {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, model_id: "eleven_multilingual_v2" }),
+    });
+    if (!res.ok) throw new Error(`Audio generation failed (${res.status})`);
+    return res.blob();
+  },
 };

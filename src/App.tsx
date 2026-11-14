@@ -17,6 +17,8 @@ import {
   ApiError,
   Attempt,
   GammaJob,
+  GammaFormat,
+  GammaOptions,
   Insights,
   Module,
   Progress,
@@ -206,7 +208,8 @@ function App() {
   const [uploadedContent, setUploadedContent] = useState("");
   const [progress, setProgress] = useState<Progress | null>(null);
   const [insights, setInsights] = useState<Insights | null>(null);
-  const [gammaJob, setGammaJob] = useStored<GammaJob | null>("learnloop-gamma-job", null);
+  const [gammaJobs, setGammaJobs] = useStored<Record<string, GammaJob>>("learnloop-gamma-jobs", {});
+  const [gammaBusy, setGammaBusy] = useState<string[]>([]);
   const [loggedIn, setLoggedIn] = useStored("learnloop-logged-in", false);
   const [theme, setTheme] = useStored<Theme>(
     "learnloop-theme",
@@ -590,45 +593,70 @@ function App() {
     });
   }
 
+  async function reportText(module: { id: string; name: string }) {
+    let detail = "";
+    try {
+      const data = await api.getInsights(module.id);
+      detail = JSON.stringify({ cohort_size: data.cohort_size, attempts: data.attempts, topics: data.topics, priority_topics: data.priority_topics });
+    } catch {
+      detail = "No aggregated insight data available yet.";
+    }
+    return `Institution report for the module "${module.name}". Use only this anonymous, aggregated data (no student names): ${detail}. Include a summary, weakest topics, and recommended teaching actions.`;
+  }
+
+  function patchGammaJob(kind: string, jobId: string, patch: (job: GammaJob) => GammaJob) {
+    setGammaJobs((current) => current[kind]?.job_id === jobId ? { ...current, [kind]: patch(current[kind]) } : current);
+  }
+
   async function pollGamma(start: () => Promise<GammaJob>, kind: string) {
-    await run("gamma", async () => {
-      setGammaJob({ ...(await start()), kind, checks: 0, last_check: Date.now() });
-    });
+    setGammaBusy((list) => [...list, kind]);
+    setError("");
+    try {
+      const job = await start();
+      setGammaJobs((current) => ({ ...current, [kind]: { ...job, kind, checks: 0, last_check: Date.now() } }));
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setGammaBusy((list) => list.filter((item) => item !== kind));
+    }
   }
 
-  async function checkGammaNow() {
-    if (!gammaJob) return;
-    const { job_id: jobId, kind, checks = 0 } = gammaJob;
-    await run("gamma", async () => {
-      const next = await api.getGammaJob(jobId);
-      setGammaJob({ ...next, kind, checks: checks + 1, last_check: Date.now() });
-    });
+  async function checkGammaNow(kind: string) {
+    const job = gammaJobs[kind];
+    if (!job) return;
+    setGammaBusy((list) => [...list, kind]);
+    try {
+      const next = await api.getGammaJob(job.job_id);
+      patchGammaJob(kind, job.job_id, (current) => ({ ...next, kind, checks: (current.checks ?? 0) + 1, last_check: Date.now() }));
+    } catch (requestError) {
+      setError(errorMessage(requestError));
+    } finally {
+      setGammaBusy((list) => list.filter((item) => item !== kind));
+    }
   }
 
-  // Ping the backend (which asks Gamma) every 15 seconds until the job finishes.
+  // Ping Gamma every 15 seconds for every job that is still pending (jobs run in parallel).
+  const pendingKey = Object.values(gammaJobs).filter((job) => job.status === "pending").map((job) => `${job.kind}:${job.job_id}`).join("|");
   useEffect(() => {
-    if (connection !== "connected" || !gammaJob || gammaJob.status !== "pending") return;
-    const { job_id: jobId, kind } = gammaJob;
+    if (!pendingKey) return;
     const started = Date.now();
-    let active = true;
-    let checks = gammaJob.checks ?? 0;
     const timer = window.setInterval(async () => {
-      if (Date.now() - started > 20 * 60 * 1000) {
-        window.clearInterval(timer);
-        setGammaJob((current) => current && current.job_id === jobId ? { ...current, status: "failed", error: "Gamma is taking longer than expected. Please try again." } : current);
-        return;
-      }
-      try {
-        const next = await api.getGammaJob(jobId);
-        checks += 1;
-        if (active) setGammaJob({ ...next, kind, checks, last_check: Date.now() });
-      } catch {
-        checks += 1;
-        if (active) setGammaJob((current) => current && current.job_id === jobId ? { ...current, checks, last_check: Date.now() } : current);
+      for (const entry of pendingKey.split("|")) {
+        const [kind, jobId] = entry.split(":");
+        if (Date.now() - started > 20 * 60 * 1000) {
+          patchGammaJob(kind, jobId, (job) => ({ ...job, status: "failed", error: "Gamma is taking longer than expected. Please try again." }));
+          continue;
+        }
+        try {
+          const next = await api.getGammaJob(jobId);
+          patchGammaJob(kind, jobId, (job) => ({ ...next, kind, checks: (job.checks ?? 0) + 1, last_check: Date.now() }));
+        } catch {
+          patchGammaJob(kind, jobId, (job) => ({ ...job, checks: (job.checks ?? 0) + 1, last_check: Date.now() }));
+        }
       }
     }, 15000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [connection, gammaJob?.job_id, gammaJob?.status]);
+    return () => window.clearInterval(timer);
+  }, [pendingKey]);
 
   const activePage = role === "Student" ? page : pageItems.includes(page) ? page : INSTITUTION_NAV[0];
   const activeTitle = activePage === "My modules" ? "My modules" : activePage === "Learning style" ? "How do you prefer to learn?" : activePage === "Study" ? "Your study space" :
@@ -828,12 +856,13 @@ function App() {
               plan={studyPlan}
               busy={busy}
               connected={connection === "connected"}
-              gammaJob={gammaJob}
+              gammaJobs={gammaJobs}
+              gammaBusy={gammaBusy}
               learnerType={learnerType}
               onLearnerType={() => go("Learning style")}
               onCreate={createPlan}
-              onGamma={() => student && studyPlan && pollGamma(() => api.createStudyMaterial(student.id, flowModuleId, studyPlan.study_plan_id), "study_material")}
-              onPoll={() => gammaJob && checkGammaNow()}
+              onGamma={(options, kind) => studyPlan && pollGamma(async () => api.createStudyMaterial(studyPlanText(studyPlan, modules.find((item) => item.id === flowModuleId)?.name), options), kind)}
+              onPoll={checkGammaNow}
               onRetest={() => go("Re-test")}
             />
           )}
@@ -850,11 +879,11 @@ function App() {
               insights={insights}
               busy={busy}
               connected={connection === "connected"}
-              gammaJob={gammaJob}
+              gammaJob={gammaJobs.institution_report ?? null}
               onSelect={(id) => { setSelectedModuleId(id); setInsights(null); }}
               onLoad={loadInsights}
-              onReport={() => pollGamma(() => api.createInstitutionReport(selectedModule.id), "institution_report")}
-              onPoll={() => gammaJob && checkGammaNow()}
+              onReport={() => pollGamma(async () => api.createInstitutionReport(await reportText(selectedModule)), "institution_report")}
+              onPoll={() => checkGammaNow("institution_report")}
             />
           )}
           {role === "Institution" && activePage === "Monitoring" && <MonitoringPage modules={responsibilityModules} />}
@@ -865,13 +894,13 @@ function App() {
             <AdminPage
               modules={modules}
               selectedModuleId={selectedModule.id}
-              gammaJob={gammaJob}
-              busy={busy}
+              gammaJob={gammaJobs.institution_report ?? null}
+              busy={gammaBusy.includes("institution_report") ? "gamma" : busy}
               connected={connection === "connected"}
               onCreate={createModule}
               onSelect={setSelectedModuleId}
-              onReport={() => pollGamma(() => api.createInstitutionReport(selectedModule.id), "institution_report")}
-              onPoll={() => gammaJob && checkGammaNow()}
+              onReport={() => pollGamma(async () => api.createInstitutionReport(await reportText(selectedModule)), "institution_report")}
+              onPoll={() => checkGammaNow("institution_report")}
             />
           )}
 
@@ -1551,7 +1580,8 @@ function StudyPlanPage({
   plan,
   busy,
   connected,
-  gammaJob,
+  gammaJobs,
+  gammaBusy,
   learnerType,
   onLearnerType,
   onCreate,
@@ -1562,12 +1592,13 @@ function StudyPlanPage({
   plan: StudyPlan | null;
   busy: string;
   connected: boolean;
-  gammaJob: GammaJob | null;
+  gammaJobs: Record<string, GammaJob>;
+  gammaBusy: string[];
   learnerType: LearnerType | null;
   onLearnerType: () => void;
   onCreate: () => void;
-  onGamma: () => void;
-  onPoll: () => void;
+  onGamma: (options: GammaOptions, kind: string) => void;
+  onPoll: (kind: string) => void;
   onRetest: () => void;
 }) {
   if (!plan) return <Card>  <EmptyState title="Your study plan is waiting">Complete a level check first. LearnLoop uses your weakest topic to build a focused plan.</EmptyState><button className="button button-primary" type="button" onClick={onCreate} disabled={!connected || !!busy}>{busy === "study-plan" ? "Making your plan…" : "Create a study plan"}</button></Card>;
@@ -1601,19 +1632,125 @@ function StudyPlanPage({
           return <><p><strong>{info.label}</strong> — {info.blurb}</p><ul>{info.tips.map((tip) => <li key={tip}>{tip}</li>)}</ul><button className="button button-quiet button-small" type="button" onClick={onLearnerType}>Change preference</button></>;
         })() : <><p>Tell us how you like to learn and we’ll add tips matched to this plan.</p><button className="button button-secondary button-small" type="button" onClick={onLearnerType}>Set my learning preference</button></>}
       </Card>
-      <Card title="Take it a little further" subtitle="Optional: request a polished study guide in Gamma.">
-        <div className="gamma-action">
-          <div><strong>Turn this plan into study material</strong><p>Gamma receives your study plan only—not your name or wellbeing information.</p></div>
-          <button className="button button-secondary" type="button" onClick={onGamma} disabled={!connected || !!busy}>
-            {busy === "gamma" ? <><span className="spinner" /> Requesting…</> : "Request Gamma material"}
-          </button>
-        </div>
-        <GammaJobStatus job={gammaJob} kind="study_material" busy={busy === "gamma"} onPoll={onPoll} />
-      </Card>
+      <StudyFormats plan={plan} learnerType={learnerType} gammaJobs={gammaJobs} gammaBusy={gammaBusy} onGamma={onGamma} onPoll={onPoll} />
       <button className="button button-secondary no-print" type="button" onClick={() => window.print()}>Download plan as PDF</button>
       <button className="button button-primary no-print" type="button" onClick={onRetest} disabled={!connected || !!busy}>Ready to try a re-test? <span aria-hidden="true">→</span></button>
     </div>
   );
+}
+
+function shortNote(plan: StudyPlan) {
+  const sentences = (`${plan.plan.summary ?? ""} ${plan.plan.explanation ?? ""}`.match(/[^.!?]+[.!?]/g) ?? [`Let's focus on ${plan.topic}.`]).map((item) => item.trim());
+  let note = `Quick note on ${plan.topic}. `;
+  for (const sentence of sentences.slice(0, 3)) if ((note + sentence).length <= 450) note += `${sentence} `;
+  return note.trim();
+}
+
+const STUDY_FORMATS: Array<{ id: "audio" | GammaFormat; label: string; icon: string; blurb: string; types: LearnerType[] }> = [
+  { id: "audio", label: "Audio summary", icon: "🔊", blurb: "A very short spoken, high-level summary. The text is hidden unless you want to read it.", types: ["auditory", "solitary", "kinaesthetic"] },
+  { id: "slides", label: "Slides", icon: "🖼️", blurb: "Gamma builds a slide deck with diagrams and images.", types: ["visual", "logical_analytical", "social"] },
+  { id: "flashcards", label: "Flashcards", icon: "🗂️", blurb: "Gamma builds question-and-answer cards for quick recall.", types: ["kinaesthetic", "logical_analytical", "reading_writing", "solitary"] },
+  { id: "guide", label: "Study guide", icon: "📘", blurb: "Gamma builds a written guide you can download as a PDF.", types: ["reading_writing", "logical_analytical", "solitary"] },
+];
+
+function StudyFormats({ plan, learnerType, gammaJobs, gammaBusy, onGamma, onPoll }: {
+  plan: StudyPlan;
+  learnerType: LearnerType | null;
+  gammaJobs: Record<string, GammaJob>;
+  gammaBusy: string[];
+  onGamma: (options: GammaOptions, kind: string) => void;
+  onPoll: (kind: string) => void;
+}) {
+  return (
+    <section className="format-section">
+      <div className="format-heading">
+        <h3>Study it your way</h3>
+        <p>Each panel works on its own, so you can create two or more at once. Chips show which learning preferences a format suits; you can try any of them.</p>
+      </div>
+      <div className="format-grid">
+        {STUDY_FORMATS.map((format) => (
+          <FormatPanel key={format.id} format={format} plan={plan} learnerType={learnerType} job={gammaJobs[format.id] ?? null} starting={gammaBusy.includes(format.id)} onGamma={onGamma} onPoll={onPoll} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FormatPanel({ format, plan, learnerType, job, starting, onGamma, onPoll }: {
+  format: (typeof STUDY_FORMATS)[number];
+  plan: StudyPlan;
+  learnerType: LearnerType | null;
+  job: GammaJob | null;
+  starting: boolean;
+  onGamma: (options: GammaOptions, kind: string) => void;
+  onPoll: (kind: string) => void;
+}) {
+  const [look, setLook] = useState("");
+  const [extra, setExtra] = useState("");
+  const suits = !!learnerType && format.types.includes(learnerType);
+  return (
+    <article className={`format-card ${suits ? "format-card-match" : ""}`}>
+      <header><span className="format-icon" aria-hidden="true">{format.icon}</span><h4>{format.label}</h4></header>
+      <p>{format.blurb}</p>
+      <div className="format-chips" aria-label="Supported learning preferences">
+        {format.types.map((type) => (
+          <span key={type} className={`chip-static ${type === learnerType ? "chip-match" : ""}`}>
+            {LEARNER_TYPES.find((item) => item.id === type)?.label}{type === learnerType ? " · suits you" : ""}
+          </span>
+        ))}
+      </div>
+      {format.id === "audio" ? <ListenButton text={shortNote(plan)} /> : (
+        <>
+          <label className="field">How should it look? (optional)
+            <textarea rows={2} maxLength={300} value={look} onChange={(event) => setLook(event.target.value)} placeholder="e.g. dark theme, bold colours, friendly tone" />
+          </label>
+          <label className="field">Anything extra to include? (optional)
+            <textarea rows={2} maxLength={500} value={extra} onChange={(event) => setExtra(event.target.value)} placeholder="e.g. a real-life example, exam tips" />
+          </label>
+          <button className="button button-secondary" type="button" disabled={starting || job?.status === "pending"} onClick={() => onGamma({ format: format.id as GammaFormat, look: look.trim(), extra: extra.trim() }, format.id)}>
+            {starting ? <><span className="spinner" /> Requesting…</> : `Create ${format.label.toLowerCase()}`}
+          </button>
+          <GammaJobStatus job={job} kind={format.id} busy={starting} onPoll={() => onPoll(format.id)} />
+        </>
+      )}
+    </article>
+  );
+}
+
+function ListenButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "error">("idle");
+  const [url, setUrl] = useState<string | null>(null);
+  async function listen() {
+    setState("loading");
+    try {
+      const blob = await api.speak(text);
+      setUrl((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob); });
+      setState("idle");
+    } catch {
+      setState("error");
+    }
+  }
+  return (
+    <div className="listen-note">
+      <button className="button button-secondary" type="button" onClick={listen} disabled={state === "loading"}>
+        {state === "loading" ? <><span className="spinner" /> Generating audio…</> : "🔊 Listen"}
+      </button>
+      {url && <audio controls autoPlay src={url} />}
+      <details><summary>Show text</summary><p>{text}</p></details>
+      {state === "error" && <p className="gamma-failed" role="status">Audio is unavailable right now.</p>}
+    </div>
+  );
+}
+
+function studyPlanText(plan: StudyPlan, moduleName?: string) {
+  const p = plan.plan;
+  return [
+    `Study guide${moduleName ? ` for ${moduleName}` : ""}: ${plan.topic}`,
+    p.summary, p.explanation,
+    p.example ? `Worked example - ${p.example.title ?? ""}: ${p.example.content ?? ""} ${p.example.walkthrough ?? ""}` : "",
+    p.practice_questions?.length ? `Practice questions:\n${p.practice_questions.map((q, i) => `${i + 1}. ${q.question}`).join("\n")}` : "",
+    p.next_steps?.length ? `Next steps:\n${p.next_steps.join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 function GammaJobStatus({ job, kind, busy, onPoll }: { job: GammaJob | null; kind: string; busy: boolean; onPoll: () => void }) {
@@ -1626,7 +1763,7 @@ function GammaJobStatus({ job, kind, busy, onPoll }: { job: GammaJob | null; kin
   }, [pending]);
   if (!job || job.kind !== kind) return null;
   const link = job.gamma_url || job.export_url;
-  if (job.status === "completed" && link) return <p className="success-line" role="status"><span>✓</span> Your {kind === "institution_report" ? "report" : "material"} is ready. <a href={link} target="_blank" rel="noreferrer">Open in Gamma ↗</a>{job.export_url && job.gamma_url && <> · <a href={job.export_url} target="_blank" rel="noreferrer">Download ↓</a></>}</p>;
+  if (job.status === "completed" && link) return <p className="success-line" role="status"><span>✓</span> Your {kind === "institution_report" ? "report" : kind === "slides" ? "slides" : kind === "flashcards" ? "flashcards" : "material"} is ready. <a href={link} target="_blank" rel="noreferrer">Open in Gamma ↗</a>{job.export_url && job.gamma_url && <> · <a className="button button-secondary" href={job.export_url} target="_blank" rel="noreferrer" download>Download PDF ↓</a></>}</p>;
   if (job.status === "completed") return <p className="gamma-failed" role="status">Gamma completed the request but did not return a result link.</p>;
   if (job.status === "failed") return <p className="gamma-failed" role="status">{job.error || "Gamma could not complete this request. You can try again later."}</p>;
   const created = Date.parse(job.created_at ?? "");
@@ -1634,7 +1771,7 @@ function GammaJobStatus({ job, kind, busy, onPoll }: { job: GammaJob | null; kin
   const next = Math.max(0, 15 - Math.floor((now - (job.last_check ?? now)) / 1000));
   return (
     <div className="gamma-pending gamma-loader" role="status">
-      <div className="gamma-loader-top"><span className="spinner" /> <strong>Gamma is building your {kind === "institution_report" ? "report" : "material"}…</strong></div>
+      <div className="gamma-loader-top"><span className="spinner" /> <strong>Gamma is building your {kind === "institution_report" ? "report" : kind === "slides" ? "slides" : kind === "flashcards" ? "flashcards" : "material"}…</strong></div>
       <div className="loader-bar"><span /></div>
       <small>{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")} elapsed · {busy ? "checking Gamma now…" : `next check in ${next}s`} · {job.checks ?? 0} check{job.checks === 1 ? "" : "s"} so far. You can keep using the app.</small>
       <button type="button" className="text-button" onClick={onPoll} disabled={busy}>Check now</button>

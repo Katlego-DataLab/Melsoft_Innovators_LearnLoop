@@ -552,3 +552,27 @@ h1, h2, h3 { font-family: Manrope, "DM Sans", sans-serif; }
 .loader-bar { background: var(--purple-light); border-radius: 99px; height: 6px; overflow: hidden; }
 .loader-bar span { animation: loader-slide 1.4s ease-in-out infinite; background: var(--purple, #7c5cd6); border-radius: 99px; display: block; height: 100%; width: 35%; }
 @keyframes loader-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+
+.listen-note { display: grid; gap: 10px; justify-items: start; }
+.listen-note audio { width: 100%; }
+
+.format-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.format-tab { border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 8px 14px; border-radius: 999px; cursor: pointer; font: inherit; }
+.format-tab.active { background: var(--purple-light); border-color: var(--purple, #6d4aff); font-weight: 600; }
+.format-panel { display: grid; gap: 12px; }
+.format-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip-static { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 0.85rem; color: var(--muted); }
+.chip-match { background: var(--purple-light); color: var(--ink); font-weight: 600; }
+.format-panel textarea { width: 100%; font: inherit; }
+
+.format-section { display: grid; gap: 12px; }
+.format-heading h3 { margin: 0 0 4px; }
+.format-heading p { margin: 0; color: var(--muted); }
+.format-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 16px; align-items: stretch; }
+@media (max-width: 760px) { .format-grid { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+.format-card { align-content: start; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 12px; }
+.format-card-match { border-color: var(--purple, #6d4aff); box-shadow: 0 0 0 2px var(--purple-light); }
+.format-card header { display: flex; align-items: center; gap: 10px; }
+.format-card h4 { margin: 0; }
+.format-card p { margin: 0; color: var(--muted); }
+.format-icon { font-size: 1.6rem; }
