@@ -1,4 +1,36 @@
-# LearnLoop
+### LearnLoop — Project Summary
+
+Problem: University students often fall behind academically because their knowledge gaps, poor study habits and learning difficulties are not identified early enough. Lecturers also struggle to monitor individual student progress in large classes, resulting in students receiving support too late.
+
+Solution: LearnLoop is an AI-powered personalised learning and early-intervention platform that helps students identify knowledge gaps, improve their understanding and receive targeted academic support before they fail.
+
+What our AI agents do:
+
+LearnLoop uses four collaborating AI agents to automate the learning support process:
+
+* Assessment Agent: Uses uploaded lecturer materials and RAG to generate diagnostic quizzes and practice questions.
+
+* Learning Coach Agent: Analyses assessment results, identifies knowledge gaps and creates personalised learning plans with explanations.
+
+* Progress Agent: Tracks student performance, evaluates improvement, conducts reassessments and identifies persistent learning difficulties.
+
+* Support Agent: Identifies potential academic-risk signals and helps connect students to appropriate institutional support.
+
+Technology stack:
+
+* Python – Core development.
+
+* FastAPI – Backend API.
+
+* Google Gemini – AI models powering the agents.
+
+* RAG – Grounds responses in uploaded learning materials.
+
+* Netlify – Platform hosting (frontend).
+
+Our goal: To help universities move from reacting to academic failure to identifying learning difficulties early and providing personalised support.
+
+
 
 LearnLoop is a responsive student-success POC built with React, TypeScript, and Vite. Its frontend uses the LearnLoop API described at `/docs`; the demo role selector is a UI-only switch and is not authentication.
 
