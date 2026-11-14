@@ -4,7 +4,7 @@ const configuredApiBaseUrl =
 export const API_BASE_URL = configuredApiBaseUrl.replace(/\/+$/, "");
 export const API_DOCS_URL = `${API_BASE_URL.startsWith("http")
   ? API_BASE_URL.replace(/\/api\/public$/, "")
-  : "https://gamma-dream-garden.lovable.app"}/docs`;
+  : "https://learnloop-slide-weaver.lovable.app"}/docs`;
 
 export type ApiErrorBody = {
   error?: {

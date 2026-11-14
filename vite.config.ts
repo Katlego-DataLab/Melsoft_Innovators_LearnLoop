@@ -39,7 +39,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         "/api/public": {
-          target: "https://gamma-dream-garden.lovable.app",
+          target: "https://learnloop-slide-weaver.lovable.app",
           changeOrigin: true,
           secure: true,
         },

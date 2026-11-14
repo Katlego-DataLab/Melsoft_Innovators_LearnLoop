@@ -5,7 +5,7 @@
 # Same-origin proxy to the LearnLoop API (the backend sends no CORS headers).
 [[redirects]]
   from = "/api/public/*"
-  to = "https://gamma-dream-garden.lovable.app/api/public/:splat"
+  to = "https://learnloop-slide-weaver.lovable.app/api/public/:splat"
   status = 200
   force = true
 
