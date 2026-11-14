@@ -265,7 +265,15 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    api.health().then(async () => {
+    const checkHealth = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { return await api.health(); } catch (healthError) {
+          if (attempt === 2) throw healthError;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+    };
+    checkHealth().then(async () => {
       if (!active) return;
       setConnection("connected");
       const savedId = student?.id;
